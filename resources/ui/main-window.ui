@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk+" version="3.22"/>
+  <object class="GtkApplicationWindow" id="main_window">
+    <property name="title">Stream Gallery</property>
+    <property name="default-width">1100</property><property name="default-height">720</property>
+    <child type="titlebar"><object class="GtkHeaderBar">
+      <property name="title">Stream Gallery</property><property name="subtitle">Native video browser and media library</property>
+      <property name="show-close-button">True</property>
+      <child><object class="GtkBox"><property name="spacing">8</property>
+        <child><object class="GtkLabel"><property name="label">Dark theme</property></object></child>
+        <child><object class="GtkSwitch" id="theme_switch"><property name="valign">center</property><property name="tooltip-text">Use dark theme</property></object></child>
+      </object><packing><property name="pack-type">end</property></packing></child>
+    </object></child>
+    <child><object class="GtkPaned"><property name="position">210</property>
+      <child><object class="GtkStackSidebar" id="sidebar"><property name="stack">pages</property><property name="width-request">170</property><style><class name="sidebar"/></style></object><packing><property name="resize">False</property><property name="shrink">False</property></packing></child>
+      <child><object class="GtkStack" id="pages"><property name="transition-type">crossfade</property><child><object class="GtkBox" id="gallery_page">
+      <property name="orientation">vertical</property><property name="spacing">16</property>
+      <property name="halign">center</property><property name="valign">center</property>
+      <style><class name="empty-state"/></style>
+      <child><object class="GtkImage"><property name="icon-name">folder-videos-symbolic</property><property name="pixel-size">64</property></object></child>
+      <child><object class="GtkLabel"><property name="label">Your library is empty</property><style><class name="empty-title"/></style></object></child>
+      <child><object class="GtkLabel"><property name="label">Saved videos will appear here once the media library is implemented in Phase 2.</property><property name="wrap">True</property><property name="max-width-chars">48</property><property name="justify">center</property><style><class name="empty-description"/></style></object></child>
+      </object><packing><property name="name">gallery</property><property name="title">Library</property></packing></child><child><object class="GtkBox" id="browser_page">
+      <property name="orientation">vertical</property><property name="spacing">16</property>
+      <property name="halign">center</property><property name="valign">center</property>
+      <style><class name="empty-state"/></style>
+      <child><object class="GtkImage"><property name="icon-name">web-browser-symbolic</property><property name="pixel-size">64</property></object></child>
+      <child><object class="GtkLabel"><property name="label">Browser — not implemented</property><style><class name="empty-title"/></style></object></child>
+      <child><object class="GtkLabel"><property name="label">Website browsing will be added in Phase 6.</property><property name="wrap">True</property><property name="max-width-chars">48</property><property name="justify">center</property><style><class name="empty-description"/></style></object></child>
+      </object><packing><property name="name">browser</property><property name="title">Discover</property></packing></child><child><object class="GtkBox" id="player_page">
+      <property name="orientation">vertical</property><property name="spacing">16</property>
+      <property name="halign">center</property><property name="valign">center</property>
+      <style><class name="empty-state"/></style>
+      <child><object class="GtkImage"><property name="icon-name">media-playback-start-symbolic</property><property name="pixel-size">64</property></object></child>
+      <child><object class="GtkLabel"><property name="label">Player — not implemented</property><style><class name="empty-title"/></style></object></child>
+      <child><object class="GtkLabel"><property name="label">Video playback will be added in Phase 4.</property><property name="wrap">True</property><property name="max-width-chars">48</property><property name="justify">center</property><style><class name="empty-description"/></style></object></child>
+      </object><packing><property name="name">player</property><property name="title">Player</property></packing></child></object><packing><property name="resize">True</property><property name="shrink">False</property></packing></child>
+    </object></child>
+  </object>
+</interface>

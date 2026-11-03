@@ -1,0 +1,6 @@
+<gresources>
+  <gresource prefix="/org/streamgallery/app">
+    <file>ui/main-window.ui</file>
+    <file>application.css</file>
+  </gresource>
+</gresources>

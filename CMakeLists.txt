@@ -1,0 +1,36 @@
+cmake_minimum_required(VERSION 3.16)
+project(StreamGallery VERSION 0.1.0 LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0>=3.22)
+find_program(GLIB_COMPILE_RESOURCES glib-compile-resources REQUIRED)
+set(RESOURCE_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/stream-gallery-resources.c")
+add_custom_command(OUTPUT "${RESOURCE_SOURCE}"
+    COMMAND "${GLIB_COMPILE_RESOURCES}" stream-gallery.gresource.xml
+        --sourcedir=${CMAKE_CURRENT_SOURCE_DIR}/resources --generate-source
+        --target=${RESOURCE_SOURCE}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+    DEPENDS resources/stream-gallery.gresource.xml resources/ui/main-window.ui resources/application.css
+    VERBATIM)
+add_library(stream-gallery-ui STATIC src/ui/MainWindow.cpp "${RESOURCE_SOURCE}")
+target_include_directories(stream-gallery-ui PUBLIC src)
+target_link_libraries(stream-gallery-ui PUBLIC PkgConfig::GTK3)
+target_compile_options(stream-gallery-ui PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>)
+add_executable(stream-gallery src/main.cpp src/app/Application.cpp)
+target_link_libraries(stream-gallery PRIVATE stream-gallery-ui)
+target_compile_options(stream-gallery PRIVATE -Wall -Wextra -Wpedantic)
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(ui-smoke-tests tests/ui_smoke_tests.cpp)
+    target_link_libraries(ui-smoke-tests PRIVATE stream-gallery-ui)
+    find_program(XVFB_RUN xvfb-run)
+    if(XVFB_RUN)
+        add_test(NAME ui-smoke COMMAND "${XVFB_RUN}" -a $<TARGET_FILE:ui-smoke-tests>)
+    else()
+        add_test(NAME ui-smoke COMMAND ui-smoke-tests)
+    endif()
+    set_tests_properties(ui-smoke PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "G_DEBUG=fatal-warnings")
+endif()
+install(TARGETS stream-gallery RUNTIME DESTINATION bin)
