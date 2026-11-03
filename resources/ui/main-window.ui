@@ -20,7 +20,7 @@
       <style><class name="empty-state"/></style>
       <child><object class="GtkImage"><property name="icon-name">folder-videos-symbolic</property><property name="pixel-size">64</property></object></child>
       <child><object class="GtkLabel"><property name="label">Your library is empty</property><style><class name="empty-title"/></style></object></child>
-      <child><object class="GtkLabel"><property name="label">Saved videos will appear here once the media library is implemented in Phase 2.</property><property name="wrap">True</property><property name="max-width-chars">48</property><property name="justify">center</property><style><class name="empty-description"/></style></object></child>
+      <child><object class="GtkLabel"><property name="label">Library support is unavailable in this build.</property><property name="wrap">True</property><property name="max-width-chars">48</property><property name="justify">center</property><style><class name="empty-description"/></style></object></child>
       </object><packing><property name="name">gallery</property><property name="title">Library</property></packing></child><child><object class="GtkBox" id="browser_page">
       <property name="orientation">vertical</property><property name="spacing">16</property>
       <property name="halign">center</property><property name="valign">center</property>

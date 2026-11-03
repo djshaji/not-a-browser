@@ -1,4 +1,7 @@
 #include "ui/MainWindow.hpp"
+#ifdef HAVE_LIBRARY
+#include "ui/GalleryView.hpp"
+#endif
 
 // Referencing the generated symbol also pulls resources from the static library.
 extern "C" GResource* stream_gallery_get_resource();
@@ -34,6 +37,20 @@ GtkWidget* createMainWindow(GtkApplication* application) {
         gtk_style_context_remove_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(provider));
         g_object_unref(provider);
     });
+#ifdef HAVE_LIBRARY
+    auto* gallery = GTK_BOX(gtk_builder_get_object(builder, "gallery_page"));
+    GList* children = gtk_container_get_children(GTK_CONTAINER(gallery));
+    for (auto* child = children; child; child = child->next) gtk_widget_destroy(GTK_WIDGET(child->data));
+    g_list_free(children);
+    gtk_widget_set_halign(GTK_WIDGET(gallery), GTK_ALIGN_FILL);
+    gtk_widget_set_valign(GTK_WIDGET(gallery), GTK_ALIGN_FILL);
+    gtk_style_context_remove_class(gtk_widget_get_style_context(GTK_WIDGET(gallery)), "empty-state");
+    gtk_widget_set_margin_start(GTK_WIDGET(gallery), 16);
+    gtk_widget_set_margin_end(GTK_WIDGET(gallery), 16);
+    gtk_widget_set_margin_top(GTK_WIDGET(gallery), 16);
+    gtk_widget_set_margin_bottom(GTK_WIDGET(gallery), 16);
+    gtk_box_pack_start(gallery, createGalleryView(), TRUE, TRUE, 0);
+#endif
     g_object_unref(builder);
     return window;
 }

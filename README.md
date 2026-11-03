@@ -1,29 +1,119 @@
 # Stream Gallery
 
-A native Linux video browser and media library, built incrementally from [Plan.md](Plan.md).
+A native Linux video browser and media library built with C++17 and GTK3. The project is being implemented incrementally from [Plan.md](Plan.md).
 
-Phase 1 implements the GTK3 application shell: a resizable navigation sidebar, Library/Discover/Player stack pages, an empty library view, and a light/dark theme switch. Browser and player pages explicitly identify their unimplemented status. Theme selection currently lasts for the running session.
+## Current status
+
+Phases 1–3 provide:
+
+- Native window, resizable sidebar, Library/Discover/Player navigation, and a session-only light/dark theme switch.
+- SQLite bookmarks, canonical URL deduplication, transactional migrations, and full-text indexing.
+- Grid/list gallery with selection, newest/oldest/title sorting, prefix search, and 24-item pagination.
+- Background database queries and thumbnail loading, cancellation of obsolete work, and a bounded thumbnail cache.
+- A command-line bookmark tool, plus database, thumbnail, and UI tests.
+
+Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. Discover and Player are explicitly marked as unimplemented. Adding a bookmark currently records the supplied metadata; it does not parse the webpage or resolve a playable stream.
+
+## Requirements
+
+- Linux with an X11 or Wayland desktop session to run the GUI.
+- C++17 compiler, CMake 3.16+, and pkg-config.
+- GTK3 3.22+ and GLib 2.66+ development files, including `glib-compile-resources`.
+- SQLite development files with FTS5 support for the library build.
+- Optional libsoup 3 development files for HTTP/HTTPS thumbnail downloads.
+
+Common development packages:
+
+| Distribution | Packages |
+| --- | --- |
+| Fedora | `gcc-c++ cmake pkgconf-pkg-config gtk3-devel glib2-devel sqlite-devel libsoup3-devel` |
+| Debian/Ubuntu | `build-essential cmake pkg-config libgtk-3-dev libglib2.0-dev-bin libsqlite3-dev libsoup-3.0-dev` |
+
+WebKitGTK, libmpv, and yt-dlp belong to future phases and are not required for the current build.
 
 ## Build and run
 
-Install a C++17 compiler, CMake 3.16+, pkg-config, GTK3 development headers (3.22+), and GLib development tools including `glib-compile-resources`. On Debian/Ubuntu these are typically provided by `build-essential cmake pkg-config libgtk-3-dev libglib2.0-dev-bin`; on Fedora use `gcc-c++ cmake pkgconf-pkg-config gtk3-devel glib2-devel`.
-
 ```sh
-cmake -S . -B build
+cmake -S . -B build -DBUILD_LIBRARY=ON
 cmake --build build
 ./build/stream-gallery
 ```
 
-A graphical X11 or Wayland session is required. UI and CSS resources are embedded into the executable, so it can run from any working directory. Later-phase dependencies such as WebKitGTK, SQLite, libmpv, and yt-dlp are not required yet.
+GTK Builder XML and CSS are embedded in the executable, so it can run from any working directory. The commands above assume the repository root.
 
-## Validation
+| CMake option | Default | Behavior |
+| --- | --- | --- |
+| `BUILD_LIBRARY` | `ON` | Build the SQLite library, gallery, and bookmark CLI. Set `OFF` for the GTK shell only. |
+| `BUILD_TESTING` | `ON` | Build and register tests with CTest. |
+
+Without libsoup development files, configuration reports that only local `file://` thumbnails and existing cache entries are supported. After installing libsoup, rerun configuration and rebuild to enable HTTP thumbnails.
+
+## Add bookmarks
+
+```sh
+./build/stream-gallery-library bookmark 'https://example.com/watch?v=1' 'Example video'
+./build/stream-gallery-library bookmark 'https://example.com/watch?v=2' 'With thumbnail' 'file:///absolute/path/thumbnail.png'
+./build/stream-gallery-library list
+```
+
+CLI syntax:
+
+```text
+stream-gallery-library bookmark URL TITLE [THUMBNAIL_URL]
+stream-gallery-library list
+```
+
+Bookmark URLs must use HTTP or HTTPS without embedded credentials. The optional thumbnail URL accepts local `file://` images or HTTP/HTTPS images. Remote images require libsoup support at build time.
+
+URL normalization handles scheme/host casing, default ports, empty paths, and fragments while preserving query parameters. Re-adding an existing bookmark returns its ID and preserves its original title and thumbnail metadata.
+
+## Browse the library
+
+1. Add bookmarks through the CLI, then open Library and press **Refresh**.
+2. Choose **Grid** or **List**, and sort by newest, oldest, or title.
+3. Enter search terms to match title/description prefixes. Multiple terms must all match; FTS operators and folder/tag filters are not exposed.
+4. Use **Previous** and **Next** to browse 24 records per page.
+5. Select a card to display its page URL; selection does not start playback.
+
+Thumbnail decoding and database access run outside the GTK main thread. Only the current page's images are requested. Thumbnails are scaled within 192 × 108 pixels, with a disk cache capped at 256 entries. Downloads have a 10-second session timeout and a 5 MiB input limit. Missing or invalid images retain a generic video icon.
+
+## Storage
+
+| Data | Location | Default |
+| --- | --- | --- |
+| Library | `$XDG_DATA_HOME/stream-gallery/library.db` | `~/.local/share/stream-gallery/library.db` |
+| Thumbnails | `$XDG_CACHE_HOME/stream-gallery/thumbnails/` | `~/.cache/stream-gallery/thumbnails/` |
+
+Schema version 2 adds thumbnail URLs and a title-sort index. Existing version-1 databases migrate automatically while preserving bookmarks, folders, tags, and relationships. Use temporary XDG directories when experimenting with disposable data.
+
+## Tests
 
 ```sh
 ctest --test-dir build --output-on-failure
 ```
 
-The UI smoke test constructs and destroys windows, checks all navigation pages, and verifies both theme settings with GTK warnings treated as failures. CMake uses `xvfb-run` automatically when installed; otherwise a graphical display is required and the test reports skipped if none is available.
+With `BUILD_LIBRARY=ON`, three tests are registered:
 
-For manual validation, launch the executable, switch between all three sidebar entries, toggle the theme, resize the sidebar/window, and close the application. Database persistence, imports, playback, and website browsing belong to subsequent phases.
+| Test | Coverage |
+| --- | --- |
+| `database` | Persistence, migrations, deduplication, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
+| `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
+| `ui-smoke` | Window lifecycle, navigation, grid/list modes, paging, search, accessibility name, and theme switching against an isolated library. |
 
-Validation in the implementation environment: compilation succeeded; the UI smoke test was skipped because the configured display could not be opened. A Broadway fallback was also blocked by the environment's socket restrictions. Run the smoke test and manual checks in a desktop session before treating runtime acceptance as verified.
+UI tests use Adwaita and treat GTK warnings as failures. CMake runs them through `xvfb-run` when available; otherwise they require a working display. Missing displays cause a skip. Thumbnail tests also skip when permission restrictions prevent the system image codec sandbox from running. Review skipped tests separately from passing tests.
+
+For manual validation, add bookmarks, search, switch views, select cards, resize the window/sidebar, toggle the theme, and restart. Confirm that bookmarks persist. Add more than 24 records to exercise pagination and supply an image URL to check thumbnails.
+
+## Website discovery design
+
+Website discovery is planned around a shared engine and one adapter per supported website. WebKitGTK will render JavaScript-enabled pages; adapters will extract video-page links, titles, thumbnails, durations, and pagination controls from the rendered DOM. Simple adapters will use JSON selectors; complex sites can use code implementations.
+
+The engine will handle normalization, deduplication, cancellation, timeouts, and page limits. Dynamic pagination will observe DOM changes with `MutationObserver`, supporting next-page links, Load More buttons, and infinite scrolling. Adapter failures should remain isolated to the affected website. Validate the adapter interface against two sites with different listing behavior and saved HTML fixtures.
+
+Discovery and playback resolution remain separate: the library stores durable webpage URLs, while yt-dlp will later resolve temporary playback URLs. Browser sessions will remain in WebKit's website data store. These capabilities are planned, not implemented.
+
+## Roadmap and contribution
+
+Next is Phase 4: libmpv playback through `GtkGLArea`, transport controls, seeking, fullscreen, and resume position. Subsequent phases add stream resolution, WebKitGTK browsing, site adapters, pagination automation, library editing, and release hardening.
+
+See [Plan.md](Plan.md) for architecture and phase acceptance criteria, and [AGENTS.md](AGENTS.md) for contributor guidelines. Source modules live in `src/app/`, `src/ui/`, `src/database/`, `src/models/`, and `src/services/`; embedded assets are in `resources/`, and tests are in `tests/`.
