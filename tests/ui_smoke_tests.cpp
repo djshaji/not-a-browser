@@ -19,7 +19,7 @@ GtkWidget* findWidget(GtkWidget* root, GType type) {
     g_list_free(children);
     return found;
 }
-#ifdef HAVE_LIBRARY_TESTS
+#if defined(HAVE_LIBRARY_TESTS) || defined(HAVE_PLAYER_TESTS)
 GtkWidget* findNamed(GtkWidget* root, const char* name) {
     if (g_strcmp0(gtk_widget_get_name(root),name)==0) return root;
     if (!GTK_IS_CONTAINER(root)) return nullptr;
@@ -30,6 +30,8 @@ GtkWidget* findNamed(GtkWidget* root, const char* name) {
     g_list_free(children);
     return found;
 }
+#endif
+#ifdef HAVE_LIBRARY_TESTS
 void waitFor(const std::function<bool()>& predicate) {
     const gint64 deadline = g_get_monotonic_time() + 10 * G_TIME_SPAN_SECOND;
     while (!predicate() && g_get_monotonic_time() < deadline) {
@@ -103,6 +105,20 @@ int main(int argc, char** argv) {
         gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-search")),"Unique");
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status),"1–1 of 1 videos")==0; });
         g_assert_cmpuint(childCount(),==,1);
+#endif
+#ifdef HAVE_PLAYER_TESTS
+        g_assert_nonnull(findWidget(window, GTK_TYPE_GL_AREA));
+        auto* url = GTK_ENTRY(findNamed(window, "player-url"));
+        auto* openUrl = GTK_BUTTON(findNamed(window, "player-open-url"));
+        auto* playerStatus = GTK_LABEL(findNamed(window, "player-status"));
+        g_assert_nonnull(url);
+        g_assert_nonnull(openUrl);
+        for (const char* invalid : {"file:///etc/passwd", "https://user:password@example.com/video", "not a URL"}) {
+            gtk_entry_set_text(url, invalid);
+            gtk_button_clicked(openUrl);
+            g_assert_cmpstr(gtk_label_get_text(playerStatus), ==,
+                "Enter an HTTP/HTTPS media URL without credentials");
+        }
 #endif
         auto* toggle = GTK_SWITCH(findWidget(window, GTK_TYPE_SWITCH));
         g_assert_nonnull(toggle);

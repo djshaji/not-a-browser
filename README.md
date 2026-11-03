@@ -12,7 +12,7 @@ Phases 1–3 provide:
 - Background database queries and thumbnail loading, cancellation of obsolete work, and a bounded thumbnail cache.
 - A command-line bookmark tool, plus database, thumbnail, and UI tests.
 
-Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. Discover and Player are explicitly marked as unimplemented. Adding a bookmark currently records the supplied metadata; it does not parse the webpage or resolve a playable stream.
+Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. Discover is explicitly marked as unimplemented. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. Adding a bookmark currently records the supplied metadata; it does not parse the webpage or resolve a playable stream.
 
 ## Requirements
 
@@ -29,7 +29,7 @@ Common development packages:
 | Fedora | `gcc-c++ cmake pkgconf-pkg-config gtk3-devel glib2-devel sqlite-devel libsoup3-devel` |
 | Debian/Ubuntu | `build-essential cmake pkg-config libgtk-3-dev libglib2.0-dev-bin libsqlite3-dev libsoup-3.0-dev` |
 
-WebKitGTK, libmpv, and yt-dlp belong to future phases and are not required for the current build.
+The player build requires libmpv and libepoxy development files (`mpv-devel libepoxy-devel` on Fedora). Disable it with `-DBUILD_PLAYER=OFF` for a gallery-only build. WebKitGTK and yt-dlp belong to future phases.
 
 ## Build and run
 
@@ -44,6 +44,7 @@ GTK Builder XML and CSS are embedded in the executable, so it can run from any w
 | CMake option | Default | Behavior |
 | --- | --- | --- |
 | `BUILD_LIBRARY` | `ON` | Build the SQLite library, gallery, and bookmark CLI. Set `OFF` for the GTK shell only. |
+| `BUILD_PLAYER` | `ON` | Build the libmpv player with GtkGLArea rendering. |
 | `BUILD_TESTING` | `ON` | Build and register tests with CTest. |
 
 Without libsoup development files, configuration reports that only local `file://` thumbnails and existing cache entries are supported. After installing libsoup, rerun configuration and rebuild to enable HTTP thumbnails.
@@ -76,6 +77,14 @@ URL normalization handles scheme/host casing, default ports, empty paths, and fr
 5. Select a card to display its page URL; selection does not start playback.
 
 Thumbnail decoding and database access run outside the GTK main thread. Only the current page's images are requested. Thumbnails are scaled within 192 × 108 pixels, with a disk cache capped at 256 entries. Downloads have a 10-second session timeout and a 5 MiB input limit. Missing or invalid images retain a generic video icon.
+
+## Playback
+
+Open **Player**, then choose **Open file…**, or enter a direct HTTP/HTTPS media URL and choose **Open URL**. Ordinary MP4 and HLS streams are handled by libmpv; webpage URLs are not resolved yet.
+
+Controls provide play/pause, seeking, volume, playback speed, and window fullscreen. Press Escape to leave fullscreen. A working OpenGL desktop session is required. Errors appear below the controls.
+
+libmpv saves resume state when replacing a playing file or closing the application, under `$XDG_STATE_HOME/stream-gallery/watch-later/` (normally `~/.local/state/stream-gallery/watch-later/`). Resume is separate from library bookmarks. Gallery selection does not start playback.
 
 ## Storage
 
@@ -114,6 +123,6 @@ Discovery and playback resolution remain separate: the library stores durable we
 
 ## Roadmap and contribution
 
-Next is Phase 4: libmpv playback through `GtkGLArea`, transport controls, seeking, fullscreen, and resume position. Subsequent phases add stream resolution, WebKitGTK browsing, site adapters, pagination automation, library editing, and release hardening.
+Phase 4 now has an initial libmpv player through `GtkGLArea`, transport controls, seeking, fullscreen, and libmpv resume state. Desktop playback validation remains required. Subsequent phases add stream resolution, WebKitGTK browsing, site adapters, pagination automation, library editing, and release hardening.
 
 See [Plan.md](Plan.md) for architecture and phase acceptance criteria, and [AGENTS.md](AGENTS.md) for contributor guidelines. Source modules live in `src/app/`, `src/ui/`, `src/database/`, `src/models/`, and `src/services/`; embedded assets are in `resources/`, and tests are in `tests/`.
