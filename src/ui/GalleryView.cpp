@@ -13,6 +13,8 @@ namespace {
 constexpr int pageSize = 24;
 struct Gallery {
     GtkWidget *root, *search, *sort, *mode, *flow, *status, *selection, *previous, *next, *refresh;
+    GtkWidget* discover = nullptr;
+    std::function<void(const std::string&)> openPage;
     GCancellable* cancellable = nullptr;
     guint debounce = 0;
     unsigned generation = 0;
@@ -60,6 +62,7 @@ void render(const GalleryPtr& state) {
     GList* children = gtk_container_get_children(GTK_CONTAINER(state->flow));
     for (auto* child = children; child; child = child->next) gtk_widget_destroy(GTK_WIDGET(child->data));
     g_list_free(children);
+    if (state->discover) gtk_widget_set_sensitive(state->discover, FALSE);
     gtk_label_set_text(GTK_LABEL(state->selection),"Select a bookmark to see its page URL.");
     const bool list = gtk_combo_box_get_active(GTK_COMBO_BOX(state->mode)) == 1;
     gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(state->flow),list ? 1 : 4);
@@ -162,13 +165,15 @@ void selectionChanged(GtkFlowBox* flow, gpointer data) {
         if (index >= 0 && static_cast<std::size_t>(index) < state->page.items.size()) {
             const auto& video = state->page.items[index];
             gtk_label_set_text(GTK_LABEL(state->selection),video.canonicalUrl.c_str());
+            if (state->discover) gtk_widget_set_sensitive(state->discover, TRUE);
         }
     }
     g_list_free(selected);
 }
 }
-GtkWidget* createGalleryView() {
+GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     auto state = std::make_shared<Gallery>();
+    state->openPage = std::move(openPage);
     state->root = gtk_box_new(GTK_ORIENTATION_VERTICAL,12);
     g_object_set_data_full(G_OBJECT(state->root),"gallery-state",new GalleryPtr(state),
         [](gpointer data) { delete static_cast<GalleryPtr*>(data); });
@@ -201,6 +206,22 @@ GtkWidget* createGalleryView() {
     gtk_label_set_selectable(GTK_LABEL(state->selection),TRUE);
     gtk_label_set_ellipsize(GTK_LABEL(state->selection),PANGO_ELLIPSIZE_MIDDLE);
     gtk_box_pack_start(GTK_BOX(state->root),state->selection,FALSE,FALSE,0);
+    if (state->openPage) {
+        state->discover = gtk_button_new_with_label("Discover & Play selected");
+        gtk_widget_set_name(state->discover, "library-discover");
+        gtk_widget_set_sensitive(state->discover, FALSE);
+        gtk_box_pack_start(GTK_BOX(state->root), state->discover, FALSE, FALSE, 0);
+        g_signal_connect(state->discover, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+            auto* state = static_cast<Gallery*>(data);
+            GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(state->flow));
+            if (selected) {
+                int index = gtk_flow_box_child_get_index(GTK_FLOW_BOX_CHILD(selected->data));
+                if (index >= 0 && static_cast<std::size_t>(index) < state->page.items.size())
+                    state->openPage(state->page.items[index].canonicalUrl);
+            }
+            g_list_free(selected);
+        }), state.get());
+    }
     auto* paging = gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
     state->previous = gtk_button_new_with_label("Previous");
     state->next = gtk_button_new_with_label("Next");

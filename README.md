@@ -4,15 +4,16 @@ A native Linux video browser and media library built with C++17 and GTK3. The pr
 
 ## Current status
 
-Phases 1–3 provide:
+The current build provides:
 
 - Native window, resizable sidebar, Library/Discover/Player navigation, and a session-only light/dark theme switch.
 - SQLite bookmarks, canonical URL deduplication, transactional migrations, and full-text indexing.
 - Grid/list gallery with selection, newest/oldest/title sorting, prefix search, and 24-item pagination.
 - Background database queries and thumbnail loading, cancellation of obsolete work, and a bounded thumbnail cache.
-- A command-line bookmark tool, plus database, thumbnail, and UI tests.
+- A command-line bookmark tool, plus database, thumbnail, player, DOM extraction, and UI tests.
+- Native libmpv playback and WebKitGTK webpage loading with DOM-based HLS extraction.
 
-Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. Discover is explicitly marked as unimplemented. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. Adding a bookmark currently records the supplied metadata; it does not parse the webpage or resolve a playable stream.
+Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. Adding a bookmark records the supplied metadata. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
 
 ## Requirements
 
@@ -26,10 +27,10 @@ Common development packages:
 
 | Distribution | Packages |
 | --- | --- |
-| Fedora | `gcc-c++ cmake pkgconf-pkg-config gtk3-devel glib2-devel sqlite-devel libsoup3-devel` |
-| Debian/Ubuntu | `build-essential cmake pkg-config libgtk-3-dev libglib2.0-dev-bin libsqlite3-dev libsoup-3.0-dev` |
+| Fedora | `gcc-c++ cmake pkgconf-pkg-config gtk3-devel glib2-devel sqlite-devel libsoup3-devel mpv-devel libepoxy-devel webkit2gtk4.1-devel` |
+| Debian/Ubuntu | `build-essential cmake pkg-config libgtk-3-dev libglib2.0-dev-bin libsqlite3-dev libsoup-3.0-dev libmpv-dev libepoxy-dev libwebkit2gtk-4.1-dev` |
 
-The player build requires libmpv and libepoxy development files (`mpv-devel libepoxy-devel` on Fedora). Disable it with `-DBUILD_PLAYER=OFF` for a gallery-only build. WebKitGTK and yt-dlp belong to future phases.
+The player build requires libmpv and libepoxy development files (`mpv-devel libepoxy-devel` on Fedora). Disable it with `-DBUILD_PLAYER=OFF` for a gallery-only build. Discovery requires WebKitGTK 4.1 version 2.40 or newer. Disable it with `-DBUILD_DISCOVERY=OFF`. yt-dlp is not used.
 
 ## Build and run
 
@@ -43,8 +44,9 @@ GTK Builder XML and CSS are embedded in the executable, so it can run from any w
 
 | CMake option | Default | Behavior |
 | --- | --- | --- |
-| `BUILD_LIBRARY` | `ON` | Build the SQLite library, gallery, and bookmark CLI. Set `OFF` for the GTK shell only. |
+| `BUILD_LIBRARY` | `ON` | Build the SQLite library, gallery, and bookmark CLI. Set `OFF` to omit the SQLite library and gallery. |
 | `BUILD_PLAYER` | `ON` | Build the libmpv player with GtkGLArea rendering. |
+| `BUILD_DISCOVERY` | `ON` | Build WebKit DOM-based HLS discovery when the player is enabled. |
 | `BUILD_TESTING` | `ON` | Build and register tests with CTest. |
 
 Without libsoup development files, configuration reports that only local `file://` thumbnails and existing cache entries are supported. After installing libsoup, rerun configuration and rebuild to enable HTTP thumbnails.
@@ -103,28 +105,31 @@ Schema version 2 adds thumbnail URLs and a title-sort index. Existing version-1 
 ctest --test-dir build --output-on-failure
 ```
 
-With `BUILD_LIBRARY=ON`, three tests are registered:
+With the library, player, and discovery enabled, four tests are registered:
 
 | Test | Coverage |
 | --- | --- |
 | `database` | Persistence, migrations, deduplication, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
 | `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
+| `discovery` | Rendered JavaScript DOM, relative and escaped HLS URLs, deduplication, navigation cancellation, destruction during extraction, and local webpage-to-HLS playback when ffmpeg is installed. |
 | `ui-smoke` | Window lifecycle, navigation, grid/list modes, paging, search, accessibility name, and theme switching against an isolated library. |
 
-UI tests use Adwaita and treat GTK warnings as failures. CMake runs them through `xvfb-run` when available; otherwise they require a working display. Missing displays cause a skip. Thumbnail tests also skip when permission restrictions prevent the system image codec sandbox from running. Review skipped tests separately from passing tests.
+UI tests use Adwaita and treat GTK warnings as failures. CMake runs them through `xvfb-run` when available; otherwise they require a working display. Missing displays cause a skip. Thumbnail tests also skip when permission restrictions prevent the system image codec sandbox from running. Review skipped tests separately from passing tests. The discovery test uses ffmpeg when available to generate a local HLS video fixture; without it, that playback subcheck is reported as skipped while DOM checks still run.
 
 For manual validation, add bookmarks, search, switch views, select cards, resize the window/sidebar, toggle the theme, and restart. Confirm that bookmarks persist. Add more than 24 records to exercise pagination and supply an image URL to check thumbnails.
 
-## Website discovery design
+## Webpage HLS discovery
 
-Website discovery is planned around a shared engine and one adapter per supported website. WebKitGTK will render JavaScript-enabled pages; adapters will extract video-page links, titles, thumbnails, durations, and pagination controls from the rendered DOM. Simple adapters will use JSON selectors; complex sites can use code implementations.
+In **Discover**, enter an HTTP/HTTPS webpage URL and choose **Load & Play** (or press Enter). The embedded WebKitGTK view loads the page and runs its JavaScript. The app scans media sources, DOM attributes, and inline scripts for `.m3u8` URLs, resolves relative links, and removes duplicates. It automatically sends the first result to libmpv and switches to Player. Choose another result and **Play stream** to use an alternative.
 
-The engine will handle normalization, deduplication, cancellation, timeouts, and page limits. Dynamic pagination will observe DOM changes with `MutationObserver`, supporting next-page links, Load More buttons, and infinite scrolling. Adapter failures should remain isolated to the affected website. Validate the adapter interface against two sites with different listing behavior and saved HTML fixtures.
+Extraction retries every 500 ms for up to 20 seconds after loading. If the page needs interaction, use its player in Discover, then choose **Extract & Play**. **Stop loading** cancels both loading and extraction. New navigation cancels stale results; page loading has a 30-second timeout.
 
-Discovery and playback resolution remain separate: the library stores durable webpage URLs, while yt-dlp will later resolve temporary playback URLs. Browser sessions will remain in WebKit's website data store. These capabilities are planned, not implemented.
+The native player receives the webpage referrer and browser user agent. Browser cookies stay in WebKit's website data store under the app's XDG data/cache directories; they are not copied to libmpv. Streams that require browser cookies or are exposed only through network traffic, inaccessible frames, or protected players may not play through this DOM-only workflow. There is no network interception or yt-dlp fallback.
+
+Library bookmarks retain their durable webpage URLs. Temporary manifest URLs are used for playback and are not saved as bookmarks. Website-specific listing adapters, metadata import, and pagination remain planned.
 
 ## Roadmap and contribution
 
-Phase 4 now has an initial libmpv player through `GtkGLArea`, transport controls, seeking, fullscreen, and libmpv resume state. Desktop playback validation remains required. Subsequent phases add stream resolution, WebKitGTK browsing, site adapters, pagination automation, library editing, and release hardening.
+Phase 4 now has an initial libmpv player through `GtkGLArea`, transport controls, seeking, fullscreen, and libmpv resume state. Desktop playback validation remains required. WebKit browsing and DOM-based HLS playback are now available as an initial discovery workflow. Subsequent work adds site adapters, pagination automation, library editing, and release hardening.
 
 See [Plan.md](Plan.md) for architecture and phase acceptance criteria, and [AGENTS.md](AGENTS.md) for contributor guidelines. Source modules live in `src/app/`, `src/ui/`, `src/database/`, `src/models/`, and `src/services/`; embedded assets are in `resources/`, and tests are in `tests/`.

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#include <optional>
 
 namespace streamgallery {
 namespace {
@@ -35,6 +36,8 @@ public:
     std::vector<HiddenWidget> hiddenWidgets;
     double duration = 0;
     std::string rendererError;
+    struct PendingLoad { std::string path, referrer, userAgent; };
+    std::optional<PendingLoad> pendingLoad;
 
     PlayerView() {
         auto* toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -305,7 +308,12 @@ public:
     void set(const char* property, double value) {
         if (mpv) mpv_set_property_async(mpv, 0, property, MPV_FORMAT_DOUBLE, &value);
     }
-    void load(const char* path) {
+    void load(const char* path, const char* referrer = "", const char* userAgent = "StreamGallery/0.1") {
+        if (mpv && !gtk_widget_get_realized(area)) {
+            pendingLoad = PendingLoad{path, referrer, userAgent};
+            message("Starting video renderer…");
+            return;
+        }
         if (!renderer && mpv && gtk_widget_get_realized(area)) realize();
         if (!mpv || !renderer) {
             message(rendererError.empty() ? "Video renderer is not ready; open the Player page first" : rendererError.c_str());
@@ -316,6 +324,8 @@ public:
         atEnd = false;
         duration = 0;
         gtk_widget_set_sensitive(position, FALSE);
+        mpv_set_property_async(mpv, 0, "referrer", MPV_FORMAT_STRING, &referrer);
+        mpv_set_property_async(mpv, 0, "user-agent", MPV_FORMAT_STRING, &userAgent);
         const char* args[] = {"loadfile", path, "replace", nullptr}; command(args);
         message("Loading…");
     }
@@ -334,7 +344,14 @@ public:
             {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &init}, {MPV_RENDER_PARAM_INVALID, nullptr}};
         int result = mpv_render_context_create(&renderer, mpv, params);
         if (result < 0) failRenderer(std::string("libmpv OpenGL renderer failed: ") + mpv_error_string(result));
-        else { rendererError.clear(); message("Player ready"); }
+        else {
+            rendererError.clear(); message("Player ready");
+            if (pendingLoad) {
+                auto request = std::move(*pendingLoad);
+                pendingLoad.reset();
+                load(request.path.c_str(), request.referrer.c_str(), request.userAgent.c_str());
+            }
+        }
     }
     void unrealize() {
         if (!renderer) return;
@@ -420,6 +437,10 @@ void setPlayerFullscreen(GtkWidget* player, bool fullscreen) {
 void openPlayerFile(GtkWidget* player, const char* filename) {
     auto* controller = static_cast<PlayerView*>(g_object_get_data(G_OBJECT(player), "player-controller"));
     if (controller && filename) controller->load(filename);
+}
+void openPlayerStream(GtkWidget* player, const char* url, const char* referrer, const char* userAgent) {
+    auto* controller = static_cast<PlayerView*>(g_object_get_data(G_OBJECT(player), "player-controller"));
+    if (controller && url && referrer && userAgent) controller->load(url, referrer, userAgent);
 }
 gboolean handlePlayerKey(GtkWidget* player, GdkEventKey* event) {
     auto* controller = static_cast<PlayerView*>(g_object_get_data(G_OBJECT(player), "player-controller"));

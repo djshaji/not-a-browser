@@ -2,5 +2,6 @@
   <gresource prefix="/org/streamgallery/app">
     <file>ui/main-window.ui</file>
     <file>application.css</file>
+    <file>scripts/extract-hls.js</file>
   </gresource>
 </gresources>

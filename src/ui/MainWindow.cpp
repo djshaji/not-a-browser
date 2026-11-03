@@ -8,6 +8,10 @@
 #include <clocale>
 #endif
 
+#ifdef HAVE_DISCOVERY
+#include "ui/BrowserView.hpp"
+#endif
+
 // Referencing the generated symbol also pulls resources from the static library.
 extern "C" GResource* stream_gallery_get_resource();
 
@@ -69,7 +73,17 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     gtk_widget_set_margin_end(GTK_WIDGET(gallery), 16);
     gtk_widget_set_margin_top(GTK_WIDGET(gallery), 16);
     gtk_widget_set_margin_bottom(GTK_WIDGET(gallery), 16);
-    gtk_box_pack_start(gallery, createGalleryView(), TRUE, TRUE, 0);
+#ifdef HAVE_DISCOVERY
+    auto* galleryView = createGalleryView([window](const std::string& url) {
+        auto* browser = GTK_WIDGET(g_object_get_data(G_OBJECT(window), "discovery-view"));
+        auto* stack = GTK_STACK(gtk_widget_get_ancestor(browser, GTK_TYPE_STACK));
+        gtk_stack_set_visible_child_name(stack, "browser");
+        openBrowserPage(browser, url);
+    });
+#else
+    auto* galleryView = createGalleryView();
+#endif
+    gtk_box_pack_start(gallery, galleryView, TRUE, TRUE, 0);
 #endif
 #ifdef HAVE_PLAYER
     auto* player = GTK_BOX(gtk_builder_get_object(builder, "player_page"));
@@ -95,6 +109,24 @@ GtkWidget* createMainWindow(GtkApplication* application) {
             setPlayerFullscreen(GTK_WIDGET(view), false);
         return FALSE;
     }), playerView, G_CONNECT_DEFAULT);
+#endif
+#ifdef HAVE_DISCOVERY
+    auto* browserPage = GTK_BOX(gtk_builder_get_object(builder, "browser_page"));
+    GList* browserChildren = gtk_container_get_children(GTK_CONTAINER(browserPage));
+    for (auto* child = browserChildren; child; child = child->next) gtk_widget_destroy(GTK_WIDGET(child->data));
+    g_list_free(browserChildren);
+    gtk_widget_set_halign(GTK_WIDGET(browserPage), GTK_ALIGN_FILL);
+    gtk_widget_set_valign(GTK_WIDGET(browserPage), GTK_ALIGN_FILL);
+    gtk_style_context_remove_class(gtk_widget_get_style_context(GTK_WIDGET(browserPage)), "empty-state");
+    auto* pages = GTK_STACK(gtk_builder_get_object(builder, "pages"));
+    auto* browser = createBrowserView([pages, playerView](const std::string& stream, const std::string& page,
+                                                        const std::string& agent) {
+        gtk_stack_set_visible_child_name(pages, "player");
+        // Selecting the page maps its GL area before loading the stream.
+        openPlayerStream(playerView, stream.c_str(), page.c_str(), agent.c_str());
+    });
+    gtk_box_pack_start(browserPage, browser, TRUE, TRUE, 0);
+    g_object_set_data(G_OBJECT(window), "discovery-view", browser);
 #endif
     g_object_unref(builder);
     return window;
