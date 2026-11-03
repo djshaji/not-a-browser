@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace streamgallery {
 namespace {
@@ -17,13 +18,23 @@ public:
     GtkWidget* area = gtk_gl_area_new();
     GtkWidget* status = gtk_label_new("Open a local video or a direct media URL");
     GtkWidget* position = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 1, 1);
+    GtkWidget* volume = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
+    GtkWidget* mute = gtk_toggle_button_new_with_label("Muted");
     GtkWidget* play = gtk_button_new_with_label("Play / Pause");
     mpv_handle* mpv = nullptr;
     mpv_render_context* renderer = nullptr;
     guint timer = 0;
     bool updating = false;
     bool loaded = false;
+    bool atEnd = false;
+    bool fullscreen = false;
+    bool decorated = true;
+    GtkWidget* previousPage = nullptr;
+    GtkStackTransitionType previousTransition = GTK_STACK_TRANSITION_TYPE_NONE;
+    struct HiddenWidget { GtkWidget* widget; bool visible; bool noShowAll; };
+    std::vector<HiddenWidget> hiddenWidgets;
     double duration = 0;
+    std::string rendererError;
 
     PlayerView() {
         auto* toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -43,8 +54,11 @@ public:
         gtk_box_pack_start(GTK_BOX(root), position, FALSE, FALSE, 0);
         gtk_scale_set_draw_value(GTK_SCALE(position), FALSE);
         auto* controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        auto* volume = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
         gtk_range_set_value(GTK_RANGE(volume), 100);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(mute), TRUE);
+        gtk_widget_set_name(position, "player-position");
+        gtk_widget_set_name(volume, "player-volume");
+        gtk_widget_set_name(mute, "player-mute");
         gtk_widget_set_size_request(volume, 120, -1);
         auto* speed = gtk_combo_box_text_new();
         for (const char* value : {"0.5", "1.0", "1.5", "2.0"})
@@ -52,6 +66,7 @@ public:
         gtk_combo_box_set_active(GTK_COMBO_BOX(speed), 1);
         auto* full = gtk_button_new_with_label("Fullscreen");
         gtk_box_pack_start(GTK_BOX(controls), play, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(controls), mute, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(controls), gtk_label_new("Volume"), FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(controls), volume, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(controls), speed, FALSE, FALSE, 0);
@@ -59,7 +74,9 @@ public:
         gtk_box_pack_start(GTK_BOX(root), controls, FALSE, FALSE, 0);
         gtk_label_set_ellipsize(GTK_LABEL(status), PANGO_ELLIPSIZE_MIDDLE);
         gtk_box_pack_start(GTK_BOX(root), status, FALSE, FALSE, 0);
+        g_object_set_data(G_OBJECT(root), "player-controller", this);
         gtk_widget_set_name(root, "player-view");
+        gtk_widget_set_name(play, "player-play-pause");
         gtk_widget_set_name(status, "player-status");
         gtk_widget_set_name(url, "player-url");
         gtk_widget_set_name(load, "player-open-url");
@@ -67,6 +84,10 @@ public:
         mpv = mpv_create();
         if (mpv) {
             mpv_set_option_string(mpv, "vo", "libmpv");
+            mpv_set_option_string(mpv, "keep-open", "yes");
+            mpv_set_option_string(mpv, "mute", "yes");
+            mpv_set_option_string(mpv, "volume", "100");
+            mpv_set_option_string(mpv, "volume-max", "100");
             mpv_set_option_string(mpv, "hwdec", "auto-safe");
             mpv_set_option_string(mpv, "ytdl", "no");
             mpv_set_option_string(mpv, "load-scripts", "no");
@@ -77,15 +98,18 @@ public:
             g_free(directory);
             int result = mpv_initialize(mpv);
             if (result < 0) {
-                message(mpv_error_string(result));
+                failRenderer(std::string("libmpv initialization failed: ") + mpv_error_string(result));
                 mpv_terminate_destroy(mpv);
                 mpv = nullptr;
             }
-        } else message("Unable to create libmpv player");
+        } else failRenderer("Unable to create libmpv player (check numeric locale and available memory)");
         if (mpv) {
             mpv_observe_property(mpv, 1, "duration", MPV_FORMAT_DOUBLE);
             mpv_observe_property(mpv, 2, "time-pos", MPV_FORMAT_DOUBLE);
             mpv_observe_property(mpv, 3, "pause", MPV_FORMAT_FLAG);
+            mpv_observe_property(mpv, 4, "volume", MPV_FORMAT_DOUBLE);
+            mpv_observe_property(mpv, 5, "mute", MPV_FORMAT_FLAG);
+            mpv_observe_property(mpv, 6, "eof-reached", MPV_FORMAT_FLAG);
         }
         g_signal_connect(area, "realize", G_CALLBACK((+[](GtkWidget*, gpointer p) { static_cast<PlayerView*>(p)->realize(); })), this);
         g_signal_connect(area, "unrealize", G_CALLBACK((+[](GtkWidget*, gpointer p) { static_cast<PlayerView*>(p)->unrealize(); })), this);
@@ -116,7 +140,7 @@ public:
             g_clear_error(&error);
         })), this);
         g_signal_connect(play, "clicked", G_CALLBACK((+[](GtkButton*, gpointer p) {
-            const char* args[] = {"cycle", "pause", nullptr}; static_cast<PlayerView*>(p)->command(args);
+            static_cast<PlayerView*>(p)->togglePlayback();
         })), this);
         g_signal_connect(position, "value-changed", G_CALLBACK((+[](GtkRange* range, gpointer p) {
             auto* self = static_cast<PlayerView*>(p);
@@ -126,7 +150,15 @@ public:
             }
         })), this);
         g_signal_connect(volume, "value-changed", G_CALLBACK((+[](GtkRange* range, gpointer p) {
-            static_cast<PlayerView*>(p)->set("volume", gtk_range_get_value(range));
+            auto* self = static_cast<PlayerView*>(p);
+            if (!self->updating) self->set("volume", gtk_range_get_value(range));
+        })), this);
+        g_signal_connect(mute, "toggled", G_CALLBACK((+[](GtkToggleButton* button, gpointer p) {
+            auto* self = static_cast<PlayerView*>(p);
+            if (self->mpv && !self->updating) {
+                int muted = gtk_toggle_button_get_active(button);
+                mpv_set_property_async(self->mpv, 0, "mute", MPV_FORMAT_FLAG, &muted);
+            }
         })), this);
         g_signal_connect(speed, "changed", G_CALLBACK((+[](GtkComboBox* combo, gpointer p) {
             const double speeds[] = {0.5, 1, 1.5, 2};
@@ -135,23 +167,136 @@ public:
         })), this);
         g_signal_connect(full, "clicked", G_CALLBACK((+[](GtkButton*, gpointer p) {
             auto* self = static_cast<PlayerView*>(p);
-            auto* window = GTK_WINDOW(gtk_widget_get_toplevel(self->root));
-            GdkWindow* native = gtk_widget_get_window(GTK_WIDGET(window));
-            if (native && (gdk_window_get_state(native) & GDK_WINDOW_STATE_FULLSCREEN))
-                gtk_window_unfullscreen(window);
-            else gtk_window_fullscreen(window);
+            self->toggleFullscreen();
         })), this);
         timer = g_timeout_add(33, +[](gpointer p) -> gboolean { static_cast<PlayerView*>(p)->poll(); return G_SOURCE_CONTINUE; }, this);
         g_signal_connect(root, "destroy", G_CALLBACK((+[](GtkWidget*, gpointer p) { delete static_cast<PlayerView*>(p); })), this);
     }
+    void hideForFullscreen(GtkWidget* widget) {
+        if (!widget) return;
+        hiddenWidgets.push_back({widget, gtk_widget_get_visible(widget) != FALSE,
+            gtk_widget_get_no_show_all(widget) != FALSE});
+        gtk_widget_set_no_show_all(widget, TRUE);
+        gtk_widget_hide(widget);
+    }
+    void setFullscreen(bool active) {
+        if (fullscreen == active) return;
+        fullscreen = active;
+        auto* window = GTK_WINDOW(gtk_widget_get_toplevel(root));
+        auto* stackWidget = gtk_widget_get_ancestor(root, GTK_TYPE_STACK);
+        auto* stack = stackWidget ? GTK_STACK(stackWidget) : nullptr;
+        if (active) {
+            decorated = gtk_window_get_decorated(window);
+            if (stack) {
+                previousPage = gtk_stack_get_visible_child(stack);
+                previousTransition = gtk_stack_get_transition_type(stack);
+                gtk_stack_set_transition_type(stack, GTK_STACK_TRANSITION_TYPE_NONE);
+                GtkWidget* page = root;
+                while (gtk_widget_get_parent(page) != stackWidget) page = gtk_widget_get_parent(page);
+                gtk_stack_set_visible_child(stack, page);
+                auto* parent = gtk_widget_get_parent(stackWidget);
+                if (GTK_IS_PANED(parent)) {
+                    auto* first = gtk_paned_get_child1(GTK_PANED(parent));
+                    auto* second = gtk_paned_get_child2(GTK_PANED(parent));
+                    hideForFullscreen(first == stackWidget ? second : first);
+                }
+            }
+            hideForFullscreen(gtk_window_get_titlebar(window));
+            GList* children = gtk_container_get_children(GTK_CONTAINER(root));
+            for (auto* child = children; child; child = child->next)
+                if (child->data != area) hideForFullscreen(GTK_WIDGET(child->data));
+            g_list_free(children);
+            gtk_window_set_decorated(window, FALSE);
+            gtk_widget_grab_focus(area);
+            gtk_window_fullscreen(window);
+        } else {
+            gtk_window_unfullscreen(window);
+            gtk_window_set_decorated(window, decorated);
+            for (const auto& hidden : hiddenWidgets) {
+                gtk_widget_set_no_show_all(hidden.widget, hidden.noShowAll);
+                gtk_widget_set_visible(hidden.widget, hidden.visible);
+            }
+            hiddenWidgets.clear();
+            if (stack) {
+                if (previousPage) gtk_stack_set_visible_child(stack, previousPage);
+                gtk_stack_set_transition_type(stack, previousTransition);
+            }
+            previousPage = nullptr;
+        }
+    }
+    void toggleFullscreen() { setFullscreen(!fullscreen); }
+    void togglePlayback() {
+        if (atEnd) {
+            const char* seek[] = {"seek", "0", "absolute+exact", nullptr}; command(seek);
+            const char* resume[] = {"set", "pause", "no", nullptr}; command(resume);
+        } else {
+            const char* args[] = {"cycle", "pause", nullptr}; command(args);
+        }
+    }
+    gboolean handleKey(GdkEventKey* event) {
+        // Shift and Caps Lock are accepted; preserve Ctrl/Alt/Super shortcuts.
+        constexpr guint reserved = GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_MOD3_MASK |
+            GDK_MOD4_MASK | GDK_MOD5_MASK | GDK_SUPER_MASK | GDK_HYPER_MASK | GDK_META_MASK;
+        if (event->state & reserved) return FALSE;
+        // Test the produced plus symbol before removing Shift (usually Shift+=).
+        if (event->keyval == GDK_KEY_plus || event->keyval == GDK_KEY_KP_Add) {
+            const char* args[] = {"add", "volume", "5", nullptr}; command(args); return TRUE;
+        }
+        guint key = event->keyval;
+        // Resolve Shift+1 (!), Shift+2 (@), etc. through the active keymap.
+        guint unshifted = 0;
+        if (event->hardware_keycode && gdk_keymap_translate_keyboard_state(
+                gdk_keymap_get_for_display(gtk_widget_get_display(root)), event->hardware_keycode,
+                static_cast<GdkModifierType>(event->state & ~(GDK_SHIFT_MASK | GDK_LOCK_MASK)),
+                event->group, &unshifted, nullptr, nullptr, nullptr))
+            key = unshifted;
+        key = gdk_keyval_to_lower(key);
+        if (key == GDK_KEY_minus || key == GDK_KEY_KP_Subtract) {
+            const char* args[] = {"add", "volume", "-5", nullptr}; command(args); return TRUE;
+        }
+        if (key == GDK_KEY_m) {
+            const char* args[] = {"cycle", "mute", nullptr}; command(args); return TRUE;
+        }
+        if (key == GDK_KEY_f) { toggleFullscreen(); return TRUE; }
+        if (key == GDK_KEY_p) {
+            togglePlayback(); return TRUE;
+        }
+        const char* seconds = nullptr;
+        switch (key) {
+        case GDK_KEY_Up: seconds = "300"; break;
+        case GDK_KEY_Down: seconds = "-300"; break;
+        case GDK_KEY_Right: seconds = "60"; break;
+        case GDK_KEY_Left: seconds = "-60"; break;
+        default: break;
+        }
+        if (seconds) {
+            const char* args[] = {"seek", seconds, "relative", nullptr}; command(args); return TRUE;
+        }
+        if (key >= GDK_KEY_KP_1 && key <= GDK_KEY_KP_9) key = GDK_KEY_1 + key - GDK_KEY_KP_1;
+        if (key >= GDK_KEY_1 && key <= GDK_KEY_9) {
+            std::string percent = std::to_string((key - GDK_KEY_0) * 10);
+            const char* args[] = {"seek", percent.c_str(), "absolute-percent", nullptr};
+            command(args); return TRUE;
+        }
+        return FALSE;
+    }
     ~PlayerView() {
+        g_object_set_data(G_OBJECT(root), "player-controller", nullptr);
         if (timer) g_source_remove(timer);
         g_signal_handlers_disconnect_by_data(area, this);
         unrealize();
         g_object_unref(area);
         if (mpv) mpv_terminate_destroy(mpv);
     }
-    void message(const char* text) { gtk_label_set_text(GTK_LABEL(status), text); }
+    void message(const char* text) {
+        gtk_label_set_text(GTK_LABEL(status), text);
+        gtk_widget_set_tooltip_text(status, text);
+    }
+    void failRenderer(const std::string& error) {
+        rendererError = error;
+        message(rendererError.c_str());
+        g_printerr("Stream Gallery player: %s\n", rendererError.c_str());
+    }
     void command(const char** args) {
         if (!mpv) return;
         int result = mpv_command_async(mpv, 0, args);
@@ -161,9 +306,14 @@ public:
         if (mpv) mpv_set_property_async(mpv, 0, property, MPV_FORMAT_DOUBLE, &value);
     }
     void load(const char* path) {
-        if (!mpv || !renderer) { message("Video renderer unavailable; check OpenGL support"); return; }
+        if (!renderer && mpv && gtk_widget_get_realized(area)) realize();
+        if (!mpv || !renderer) {
+            message(rendererError.empty() ? "Video renderer is not ready; open the Player page first" : rendererError.c_str());
+            return;
+        }
         if (loaded) { const char* save[] = {"write-watch-later-config", nullptr}; command(save); }
         loaded = false;
+        atEnd = false;
         duration = 0;
         gtk_widget_set_sensitive(position, FALSE);
         const char* args[] = {"loadfile", path, "replace", nullptr}; command(args);
@@ -172,7 +322,10 @@ public:
     void realize() {
         if (!mpv || renderer) return;
         gtk_gl_area_make_current(GTK_GL_AREA(area));
-        if (gtk_gl_area_get_error(GTK_GL_AREA(area))) { message(gtk_gl_area_get_error(GTK_GL_AREA(area))->message); return; }
+        if (gtk_gl_area_get_error(GTK_GL_AREA(area))) {
+            failRenderer(std::string("OpenGL context failed: ") + gtk_gl_area_get_error(GTK_GL_AREA(area))->message);
+            return;
+        }
         mpv_opengl_init_params init{+[](void* display, const char* name) -> void* {
             if (GDK_IS_WAYLAND_DISPLAY(display)) return reinterpret_cast<void*>(eglGetProcAddress(name));
             return reinterpret_cast<void*>(glXGetProcAddressARB(reinterpret_cast<const GLubyte*>(name)));
@@ -180,7 +333,8 @@ public:
         mpv_render_param params[] = {{MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_OPENGL)},
             {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &init}, {MPV_RENDER_PARAM_INVALID, nullptr}};
         int result = mpv_render_context_create(&renderer, mpv, params);
-        if (result < 0) message(mpv_error_string(result));
+        if (result < 0) failRenderer(std::string("libmpv OpenGL renderer failed: ") + mpv_error_string(result));
+        else { rendererError.clear(); message("Player ready"); }
     }
     void unrealize() {
         if (!renderer) return;
@@ -219,10 +373,31 @@ public:
                             gtk_range_set_range(GTK_RANGE(position), 0, std::max(1.0, duration));
                         } else if (event->reply_userdata == 2)
                             gtk_range_set_value(GTK_RANGE(position), value);
+                        else if (event->reply_userdata == 4)
+                            gtk_range_set_value(GTK_RANGE(volume), value);
                         updating = false;
                     }
-                } else if (property->data && event->reply_userdata == 3 && property->format == MPV_FORMAT_FLAG) {
-                    gtk_button_set_label(GTK_BUTTON(play), *static_cast<int*>(property->data) ? "Play" : "Pause");
+                } else if (property->data && property->format == MPV_FORMAT_FLAG) {
+                    bool active = *static_cast<int*>(property->data) != 0;
+                    if (event->reply_userdata == 3)
+                        gtk_button_set_label(GTK_BUTTON(play), atEnd ? "Replay" : (active ? "Play" : "Pause"));
+                    else if (event->reply_userdata == 5) {
+                        updating = true;
+                        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(mute), active);
+                        gtk_button_set_label(GTK_BUTTON(mute), active ? "Muted" : "Mute");
+                        updating = false;
+                    } else if (event->reply_userdata == 6) {
+                        bool wasAtEnd = atEnd;
+                        atEnd = active;
+                        if (!atEnd && wasAtEnd && loaded) {
+                            message("Playing");
+                            gtk_button_set_label(GTK_BUTTON(play), "Pause");
+                        }
+                        if (atEnd) {
+                            message("Playback ended — video kept open");
+                            gtk_button_set_label(GTK_BUTTON(play), "Replay");
+                        }
+                    }
                 }
             }
             if (event->event_id == MPV_EVENT_FILE_LOADED) { loaded = true; message("Playing"); }
@@ -238,4 +413,16 @@ public:
 };
 }
 GtkWidget* createPlayerView() { return (new PlayerView())->root; }
+void setPlayerFullscreen(GtkWidget* player, bool fullscreen) {
+    auto* controller = static_cast<PlayerView*>(g_object_get_data(G_OBJECT(player), "player-controller"));
+    if (controller) controller->setFullscreen(fullscreen);
+}
+void openPlayerFile(GtkWidget* player, const char* filename) {
+    auto* controller = static_cast<PlayerView*>(g_object_get_data(G_OBJECT(player), "player-controller"));
+    if (controller && filename) controller->load(filename);
+}
+gboolean handlePlayerKey(GtkWidget* player, GdkEventKey* event) {
+    auto* controller = static_cast<PlayerView*>(g_object_get_data(G_OBJECT(player), "player-controller"));
+    return controller ? controller->handleKey(event) : FALSE;
+}
 }

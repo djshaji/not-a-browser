@@ -82,7 +82,9 @@ Thumbnail decoding and database access run outside the GTK main thread. Only the
 
 Open **Player**, then choose **Open file…**, or enter a direct HTTP/HTTPS media URL and choose **Open URL**. Ordinary MP4 and HLS streams are handled by libmpv; webpage URLs are not resolved yet.
 
-Controls provide play/pause, seeking, volume, playback speed, and window fullscreen. Press Escape to leave fullscreen. A working OpenGL desktop session is required. Errors appear below the controls.
+Playback starts muted; use **M** or the mute button to enable audio. **+** raises volume by 5 points and **−** lowers it by 5 points within 0–100. Changing volume preserves mute state. Controls provide play/pause, seeking, volume, playback speed, and window fullscreen. At the end of a video, the file stays loaded with its final frame visible; **P** or **Replay** starts it again. Fullscreen shows only the video, hiding the sidebar, title bar, and controls. **F** toggles it; **Escape** leaves it and restores the previous page. Window shortcuts work on every page and while controls have focus, with or without Shift: **F** toggles fullscreen, **P** toggles play/pause, **Up/Down** seek forward/backward 300 seconds, **Right/Left** seek forward/backward 60 seconds, and **1–9** jump to 10–90% of the video. **Q** quits immediately, including in fullscreen. Ctrl/Alt/Super combinations retain their normal behavior.
+
+A working OpenGL desktop session is required. Errors appear below the controls.
 
 libmpv saves resume state when replacing a playing file or closing the application, under `$XDG_STATE_HOME/stream-gallery/watch-later/` (normally `~/.local/state/stream-gallery/watch-later/`). Resume is separate from library bookmarks. Gallery selection does not start playback.
 

@@ -5,6 +5,7 @@
 
 #ifdef HAVE_PLAYER
 #include "ui/PlayerView.hpp"
+#include <clocale>
 #endif
 
 // Referencing the generated symbol also pulls resources from the static library.
@@ -19,14 +20,24 @@ void themeChanged(GObject* toggle, GParamSpec*, gpointer) {
 }
 
 GtkWidget* createMainWindow(GtkApplication* application) {
+#ifdef HAVE_PLAYER
+    // GTK adopts the desktop locale; libmpv requires C numeric formatting.
+    // Do this once, before constructing gallery workers or the player.
+    static const bool numericLocaleReady = [] { return std::setlocale(LC_NUMERIC, "C") != nullptr; }();
+    (void)numericLocaleReady;
+#endif
     (void)stream_gallery_get_resource();
     GtkBuilder* builder = gtk_builder_new_from_resource(
         "/org/streamgallery/app/ui/main-window.ui");
     auto* window = GTK_WIDGET(gtk_builder_get_object(builder, "main_window"));
     gtk_window_set_application(GTK_WINDOW(window), application);
     g_signal_connect(window, "key-press-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventKey* event, gpointer) -> gboolean {
-        if (event->keyval != GDK_KEY_Escape) return FALSE;
-        gtk_window_unfullscreen(GTK_WINDOW(widget));
+        constexpr guint reserved = GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_MOD3_MASK |
+            GDK_MOD4_MASK | GDK_MOD5_MASK | GDK_SUPER_MASK | GDK_HYPER_MASK | GDK_META_MASK;
+        if ((event->state & reserved) || gdk_keyval_to_lower(event->keyval) != GDK_KEY_q) return FALSE;
+        auto* app = gtk_window_get_application(GTK_WINDOW(widget));
+        if (app) g_application_quit(G_APPLICATION(app));
+        gtk_widget_destroy(widget);
         return TRUE;
     }), nullptr);
     auto* toggle = GTK_SWITCH(gtk_builder_get_object(builder, "theme_switch"));
@@ -65,9 +76,25 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     GList* playerChildren = gtk_container_get_children(GTK_CONTAINER(player));
     for (auto* child = playerChildren; child; child = child->next) gtk_widget_destroy(GTK_WIDGET(child->data));
     g_list_free(playerChildren);
+    gtk_style_context_remove_class(gtk_widget_get_style_context(GTK_WIDGET(player)), "empty-state");
     gtk_widget_set_halign(GTK_WIDGET(player), GTK_ALIGN_FILL);
     gtk_widget_set_valign(GTK_WIDGET(player), GTK_ALIGN_FILL);
-    gtk_box_pack_start(player, createPlayerView(), TRUE, TRUE, 0);
+    auto* playerView = createPlayerView();
+    gtk_box_pack_start(player, playerView, TRUE, TRUE, 0);
+    // Run before GtkWindow forwards keys to the focused child.
+    g_signal_connect_object(window, "key-press-event", G_CALLBACK(+[](GtkWidget*, GdkEventKey* event, gpointer view) -> gboolean {
+        if (event->keyval == GDK_KEY_Escape) {
+            setPlayerFullscreen(GTK_WIDGET(view), false);
+            return TRUE;
+        }
+        return handlePlayerKey(GTK_WIDGET(view), event);
+    }), playerView, G_CONNECT_DEFAULT);
+    g_signal_connect_object(window, "window-state-event", G_CALLBACK(+[](GtkWidget*, GdkEventWindowState* event, gpointer view) -> gboolean {
+        if ((event->changed_mask & GDK_WINDOW_STATE_FULLSCREEN) &&
+            !(event->new_window_state & GDK_WINDOW_STATE_FULLSCREEN))
+            setPlayerFullscreen(GTK_WIDGET(view), false);
+        return FALSE;
+    }), playerView, G_CONNECT_DEFAULT);
 #endif
     g_object_unref(builder);
     return window;
