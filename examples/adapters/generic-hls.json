@@ -1,0 +1,105 @@
+{
+  "interfaceVersion": 1,
+  "id": "generic-html-hls",
+  "name": "Generic HTML master HLS and poster discovery",
+  "status": "local-fixture-runner-supported-not-loaded-by-desktop-application",
+  "description": "Proposed declarative interface with a local Python fixture runner. See examples/adapters/README.md for supported operations. Network fetching and desktop integration remain future work.",
+  "input": {
+    "htmlFile": "page.html",
+    "pageUrl": "https://example.com/watch/123",
+    "mode": "static-html",
+    "notes": "pageUrl is the original webpage URL, not the local HTML file URI. Static HTML does not execute JavaScript. Honor the first valid HTML base href when resolving HTML URLs."
+  },
+  "discovery": {
+    "playlistCandidates": {
+      "sources": [
+        { "selector": "video[src], source[src]", "attribute": "src" },
+        { "selector": "a[href], link[href]", "attribute": "href" },
+        { "selector": "[data-src]", "attribute": "data-src" },
+        { "selector": "[data-hls]", "attribute": "data-hls" },
+        { "selector": "script:not([src])", "text": true, "extract": "quoted-m3u8-urls" }
+      ],
+      "decode": ["html-entities-in-attributes", "json-string-escapes-in-script-strings"],
+      "urlPathExtension": ".m3u8",
+      "extensionCaseSensitive": false,
+      "resolveAgainst": "document-base-url",
+      "preserveQuery": true,
+      "removeFragment": true,
+      "deduplicate": true,
+      "maxCandidates": 64
+    },
+    "poster": {
+      "selection": "first-valid-url-in-source-order",
+      "sources": [
+        { "selector": "video[poster]", "attribute": "poster" },
+        { "selector": "meta[property='og:image']", "attribute": "content" },
+        { "selector": "meta[name='twitter:image']", "attribute": "content" }
+      ],
+      "resolveAgainst": "document-base-url",
+      "required": false,
+      "missingValue": null,
+      "notes": "Meta images are fallbacks and may describe the page rather than the video. Return the matched source."
+    }
+  },
+  "playlistInspection": {
+    "fetchCandidates": true,
+    "requireHeader": "#EXTM3U",
+    "masterIdentification": {
+      "anyTags": ["#EXT-X-STREAM-INF", "#EXT-X-I-FRAME-STREAM-INF"],
+      "notes": "Classify by parsed playlist tags, never by the filename master.m3u8. A media playlist is not a master; report it separately."
+    },
+    "referenceSources": [
+      { "tag": "#EXT-X-STREAM-INF", "location": "following-uri-line" },
+      { "tag": "#EXT-X-I-FRAME-STREAM-INF", "attribute": "URI" },
+      { "tag": "#EXT-X-MEDIA", "attribute": "URI", "optional": true },
+      { "tag": "#EXT-X-SESSION-KEY", "attribute": "URI", "optional": true },
+      { "tag": "#EXT-X-SESSION-DATA", "attribute": "URI", "optional": true }
+    ],
+    "classifyEachReference": ["absolute", "scheme-relative", "root-relative", "path-relative", "query-relative"],
+    "referenceSummary": ["absolute-only", "relative-only", "mixed", "none"],
+    "resolveAgainst": "final-playlist-response-url-after-redirects",
+    "preserveRawReferences": true,
+    "rewritePlaylist": false,
+    "notes": "Treat all references without a scheme as relative for the summary. Resolve references using standard URL resolution; do not concatenate strings or copy master query parameters onto child URLs. Report unsupported tags or unresolved HLS variables rather than claiming complete inspection."
+  },
+  "limits": {
+    "allowedUrlSchemes": ["https", "http"],
+    "rejectEmbeddedCredentials": true,
+    "validateRedirectTargets": true,
+    "allowPrivateNetwork": false,
+    "requestTimeoutSeconds": 10,
+    "maxPlaylistBytes": 1048576,
+    "maxRedirects": 5,
+    "maxConcurrentRequests": 4,
+    "cancelOnNewInput": true
+  },
+  "exampleOutput": {
+    "pageUrl": "https://example.com/watch/123",
+    "poster": {
+      "url": "https://example.com/images/poster.jpg",
+      "source": "video[poster]"
+    },
+    "masters": [
+      {
+        "url": "https://cdn.example.com/hls/master.m3u8?token=example",
+        "referenceSummary": "mixed",
+        "references": [
+          {
+            "tag": "#EXT-X-STREAM-INF",
+            "raw": "720p/index.m3u8",
+            "kind": "path-relative",
+            "resolvedUrl": "https://cdn.example.com/hls/720p/index.m3u8"
+          },
+          {
+            "tag": "#EXT-X-STREAM-INF",
+            "raw": "https://media.example.com/1080p/index.m3u8",
+            "kind": "absolute",
+            "resolvedUrl": "https://media.example.com/1080p/index.m3u8"
+          }
+        ]
+      }
+    ],
+    "mediaPlaylists": [],
+    "errors": []
+  }
+}

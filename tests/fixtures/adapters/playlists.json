@@ -1,0 +1,9 @@
+{
+  "https://example.com/videos/master.m3u8?token=fixture&v=1": {
+    "file": "master.m3u8",
+    "finalUrl": "https://cdn.example.com/hls/master.m3u8?token=fixture"
+  },
+  "https://example.com/media.m3u8": {
+    "file": "media.m3u8"
+  }
+}

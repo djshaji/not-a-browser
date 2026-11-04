@@ -144,7 +144,7 @@ Schema version 2 adds thumbnail URLs and a title-sort index. Existing version-1 
 ctest --test-dir build --output-on-failure
 ```
 
-With the library, player, and discovery enabled, four tests are registered:
+With the library, player, and discovery enabled, four C++ tests are registered:
 
 | Test | Coverage |
 | --- | --- |
@@ -152,6 +152,10 @@ With the library, player, and discovery enabled, four tests are registered:
 | `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
 | `discovery` | Rendered JavaScript DOM, relative and escaped HLS URLs, deduplication, navigation cancellation, destruction during extraction, and local webpage-to-HLS playback when ffmpeg is installed. |
 | `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, and quit cleanup. |
+
+When Python 3 is available, CTest also registers `adapter-runner` for the local
+generic JSON adapter runner. See [the adapter example](examples/adapters/README.md)
+for CLI usage, fixture mappings, supported operations, and integration limits.
 
 UI tests use Adwaita and treat GTK warnings as failures. CMake runs them through `xvfb-run` when available; otherwise they require a working display. Missing displays cause a skip. Thumbnail tests also skip when permission restrictions prevent the system image codec sandbox from running. Review skipped tests separately from passing tests. The discovery test uses ffmpeg when available to generate a local HLS video fixture; without it, that playback subcheck is reported as skipped while DOM checks still run.
 
