@@ -1,5 +1,8 @@
 #include "ui/BrowserView.hpp"
 #include "ui/MainWindow.hpp"
+#ifdef HAVE_LIBRARY_TESTS
+#include "database/LibraryRepository.hpp"
+#endif
 #include <libsoup/soup.h>
 #include <webkit2/webkit2.h>
 #include <functional>
@@ -34,6 +37,7 @@ int main(int argc, char** argv) {
     g_setenv("XDG_DATA_HOME", directory, TRUE);
     g_setenv("XDG_CACHE_HOME", directory, TRUE);
     g_setenv("XDG_CONFIG_HOME", directory, TRUE);
+    g_setenv("XDG_STATE_HOME", directory, TRUE);
     if (!gtk_init_check(&argc, &argv)) {
         std::filesystem::remove_all(directory); g_free(directory); return 77;
     }
@@ -73,12 +77,13 @@ int main(int argc, char** argv) {
     const std::string domBase = domUri;
     g_free(domUri); g_slist_free_full(domUris, reinterpret_cast<GDestroyNotify>(g_uri_unref));
     std::vector<std::string> played;
+    unsigned savedNotifications = 0;
     auto* browser = streamgallery::createBrowserView([&](const std::string& stream, const std::string& page,
                                                        const std::string& agent) {
         g_assert_true(page.find(domBase) == 0);
         g_assert_false(agent.empty());
         played.push_back(stream);
-    });
+    }, [&] { ++savedNotifications; });
     auto* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_default_size(GTK_WINDOW(window), 800, 600);
     gtk_container_add(GTK_CONTAINER(window), browser);
@@ -91,7 +96,7 @@ int main(int argc, char** argv) {
     // Render JavaScript-generated DOM, resolve relative URLs, decode JSON escaping,
     // reject credentials/non-HTTP links, and deduplicate the same manifest.
     std::string html = R"HTML(
-        <html><head><base href="BASEmedia/"></head><body>
+        <html><head><title> Fixture video &amp; poster </title><base href="BASEmedia/"></head><body>
         <a href="javascript:alert('x.m3u8')">invalid</a>
         <div data-src="https://user:secret@fixture.test/private.m3u8"></div>
         <video poster="../poster.svg"></video>
@@ -129,6 +134,7 @@ int main(int argc, char** argv) {
     g_assert_cmpuint(structured.errors.size(), ==, 1);
     const auto poster = domBase + "poster.svg";
     g_assert_cmpstr(structured.posterUrl.c_str(), ==, poster.c_str());
+    g_assert_cmpstr(structured.title.c_str(), ==, "Fixture video & poster");
     bool foundMaster = false;
     for (const auto& playlist : structured.playlists) {
         if (!playlist.master) continue;
@@ -138,6 +144,30 @@ int main(int argc, char** argv) {
         g_assert_cmpstr(playlist.referenceSummary.c_str(), ==, "relative-only");
     }
     g_assert_true(foundMaster);
+#ifdef HAVE_LIBRARY_TESTS
+    const auto libraryPath = (std::filesystem::path(directory) / "stream-gallery" / "library.db").string();
+    auto* save = GTK_BUTTON(find(browser, GTK_TYPE_BUTTON, "discovery-save"));
+    auto* saveStatus = GTK_LABEL(find(browser, GTK_TYPE_LABEL, "discovery-save-status"));
+    g_assert_nonnull(save);
+    g_assert_true(gtk_widget_get_sensitive(GTK_WIDGET(save)));
+    gtk_button_clicked(save);
+    waitFor([&] { return savedNotifications == 1; });
+    g_assert_cmpstr(gtk_label_get_text(saveStatus), ==, "Saved to Library");
+    gtk_button_clicked(save);
+    waitFor([&] { return savedNotifications == 2; });
+    g_assert_cmpstr(gtk_label_get_text(saveStatus), ==, "Already in Library");
+    {
+        streamgallery::Database reopened(libraryPath);
+        streamgallery::LibraryRepository library(reopened);
+        auto videos = library.videos();
+        g_assert_cmpuint(videos.size(), ==, 1);
+        g_assert_cmpstr(videos[0].canonicalUrl.c_str(), ==, page.c_str());
+        g_assert_cmpstr(videos[0].title.c_str(), ==, "Fixture video & poster");
+        g_assert_cmpstr(videos[0].thumbnailUrl.c_str(), ==, poster.c_str());
+    }
+#else
+    g_assert_null(find(browser, GTK_TYPE_BUTTON, "discovery-save"));
+#endif
     if (const char* screenshot = g_getenv("STREAM_GALLERY_TEST_SCREENSHOT")) {
         auto* image = GTK_IMAGE(find(browser, GTK_TYPE_IMAGE, "discovery-poster"));
         waitFor([&] { return gtk_image_get_storage_type(image) == GTK_IMAGE_PIXBUF; });
@@ -167,12 +197,85 @@ int main(int argc, char** argv) {
     waitFor([&] { return played.size() == 3; });
     const auto newStream = domBase + "new.m3u8";
     g_assert_cmpstr(played.back().c_str(), ==, newStream.c_str());
+#ifdef HAVE_LIBRARY_TESTS
+    const auto fallbackPage = domBase + "new-page";
+    const auto fallbackResult = streamgallery::browserDiscoveryResult(browser);
+    g_assert_cmpstr(fallbackResult.title.c_str(), ==, fallbackPage.c_str());
+    // Hold the writer lock so navigation happens before the save completes.
+    // The old page must be saved, without a success message on the new page.
+    {
+        streamgallery::Database lock(libraryPath);
+        lock.execute("BEGIN IMMEDIATE");
+        gtk_button_clicked(save);
+        const auto afterSavePage = domBase + "after-save";
+        bool navigationStarted = false;
+        const auto navigationSignal = g_signal_connect(web, "load-changed", G_CALLBACK(+[](WebKitWebView*, WebKitLoadEvent event, gpointer data) {
+            if (event == WEBKIT_LOAD_STARTED) *static_cast<bool*>(data) = true;
+        }), &navigationStarted);
+        webkit_web_view_load_html(web, "<title>Different page</title>", afterSavePage.c_str());
+        waitFor([&] { return navigationStarted; });
+        g_signal_handler_disconnect(web, navigationSignal);
+        g_assert_false(gtk_widget_get_sensitive(GTK_WIDGET(save)));
+        lock.execute("COMMIT");
+    }
+    waitFor([&] { return savedNotifications == 3; });
+    g_assert_cmpstr(gtk_label_get_text(saveStatus), ==, "");
+    {
+        streamgallery::Database reopened(libraryPath);
+        streamgallery::LibraryRepository library(reopened);
+        auto videos = library.videos();
+        g_assert_cmpuint(videos.size(), ==, 2);
+        g_assert_cmpstr(videos.back().canonicalUrl.c_str(), ==, fallbackPage.c_str());
+        g_assert_cmpstr(videos.back().title.c_str(), ==, fallbackPage.c_str());
+        g_assert_true(videos.back().thumbnailUrl.empty());
+    }
+#endif
     // Destroy while JavaScript evaluation is pending; callbacks must ignore it.
     gtk_button_clicked(extract);
     gtk_widget_destroy(window);
     const gint64 cleanup = g_get_monotonic_time() + G_TIME_SPAN_SECOND;
     while (g_get_monotonic_time() < cleanup) { while (gtk_events_pending()) gtk_main_iteration(); g_usleep(1000); }
     g_assert_cmpuint(played.size(), ==, 3);
+    // Reuse one GtkApplication for all window lifecycles in this process.
+    auto* app = gtk_application_new("org.streamgallery.DiscoveryTest", G_APPLICATION_NON_UNIQUE);
+    g_assert_true(g_application_register(G_APPLICATION(app), nullptr, &serverError));
+    g_assert_no_error(serverError);
+#ifdef HAVE_LIBRARY_TESTS
+    // Exercise the main window's automatic Library refresh, failure/retry, and
+    // re-creation using the same persisted database, without depending on ffmpeg.
+    auto* saveWindow = streamgallery::createMainWindow(app);
+    gtk_widget_show_all(saveWindow);
+    auto* saveStack = GTK_STACK(find(saveWindow, GTK_TYPE_STACK));
+    gtk_stack_set_visible_child_name(saveStack, "browser");
+    auto* saveBrowser = find(saveWindow, GTK_TYPE_BOX, "discovery-browser");
+    const auto savedPage = domBase + "saved-page";
+    webkit_web_view_load_html(WEBKIT_WEB_VIEW(find(saveBrowser, WEBKIT_TYPE_WEB_VIEW)),
+        "<title>Main window saved title</title>", savedPage.c_str());
+    auto* mainSave = GTK_BUTTON(find(saveBrowser, GTK_TYPE_BUTTON, "discovery-save"));
+    auto* mainSaveStatus = GTK_LABEL(find(saveBrowser, GTK_TYPE_LABEL, "discovery-save-status"));
+    auto* galleryStatus = GTK_LABEL(find(saveWindow, GTK_TYPE_LABEL, "library-status"));
+    waitFor([&] { return gtk_widget_get_sensitive(GTK_WIDGET(mainSave)); });
+    {
+        streamgallery::Database database(libraryPath);
+        database.execute("CREATE TRIGGER fail_test_save BEFORE INSERT ON videos BEGIN SELECT RAISE(ABORT,'Fixture save failure'); END");
+    }
+    gtk_button_clicked(mainSave);
+    waitFor([&] { return std::string(gtk_label_get_text(mainSaveStatus)).find("Could not save to Library:") == 0; });
+    g_assert_true(gtk_widget_get_sensitive(GTK_WIDGET(mainSave)));
+    {
+        streamgallery::Database database(libraryPath);
+        database.execute("DROP TRIGGER fail_test_save");
+    }
+    gtk_button_clicked(mainSave);
+    waitFor([&] { return g_strcmp0(gtk_label_get_text(mainSaveStatus), "Saved to Library") == 0; });
+    waitFor([&] { return std::string(gtk_label_get_text(galleryStatus)).find("of 3 videos") != std::string::npos; });
+    gtk_widget_destroy(saveWindow);
+    saveWindow = streamgallery::createMainWindow(app);
+    gtk_widget_show_all(saveWindow);
+    galleryStatus = GTK_LABEL(find(saveWindow, GTK_TYPE_LABEL, "library-status"));
+    waitFor([&] { return std::string(gtk_label_get_text(galleryStatus)).find("of 3 videos") != std::string::npos; });
+    gtk_widget_destroy(saveWindow);
+#endif
     soup_server_disconnect(domServer); g_object_unref(domServer);
     // Exercise the complete page -> DOM -> HLS -> native player path locally.
     gchar* ffmpeg = g_find_program_in_path("ffmpeg");
@@ -220,9 +323,6 @@ int main(int argc, char** argv) {
         fixture.page = std::string(base) + "page";
         g_free(base);
         g_slist_free_full(uris, reinterpret_cast<GDestroyNotify>(g_uri_unref));
-        auto* app = gtk_application_new("org.streamgallery.DiscoveryTest", G_APPLICATION_NON_UNIQUE);
-        g_assert_true(g_application_register(G_APPLICATION(app), nullptr, &error));
-        g_assert_no_error(error);
         auto* main = streamgallery::createMainWindow(app);
         gtk_widget_show_all(main);
         auto* stack = GTK_STACK(find(main, GTK_TYPE_STACK));
@@ -247,10 +347,10 @@ int main(int argc, char** argv) {
         g_assert_cmpint(fixture.segments, >, 0);
         g_assert_true(gtk_widget_get_sensitive(find(main, GTK_TYPE_SCALE, "player-position")));
         gtk_widget_destroy(main);
-        g_object_unref(app);
         soup_server_disconnect(server); g_object_unref(server);
         g_free(clipPath); g_free(ffmpeg);
     } else g_test_message("ffmpeg unavailable: local end-to-end HLS playback check skipped");
+    g_object_unref(app);
     std::filesystem::remove_all(directory);
     g_free(directory);
     return 0;

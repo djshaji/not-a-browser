@@ -1,4 +1,5 @@
 #include "ui/MainWindow.hpp"
+#include <utility>
 #ifdef HAVE_LIBRARY
 #include "ui/GalleryView.hpp"
 #endif
@@ -119,12 +120,16 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     gtk_widget_set_valign(GTK_WIDGET(browserPage), GTK_ALIGN_FILL);
     gtk_style_context_remove_class(gtk_widget_get_style_context(GTK_WIDGET(browserPage)), "empty-state");
     auto* pages = GTK_STACK(gtk_builder_get_object(builder, "pages"));
+    std::function<void()> librarySaved;
+#ifdef HAVE_LIBRARY
+    librarySaved = galleryRefreshCallback(galleryView);
+#endif
     auto* browser = createBrowserView([pages, playerView](const std::string& stream, const std::string& page,
                                                         const std::string& agent) {
         gtk_stack_set_visible_child_name(pages, "player");
         // Selecting the page maps its GL area before loading the stream.
         openPlayerStream(playerView, stream.c_str(), page.c_str(), agent.c_str());
-    });
+    }, std::move(librarySaved));
     gtk_box_pack_start(browserPage, browser, TRUE, TRUE, 0);
     g_object_set_data(G_OBJECT(window), "discovery-view", browser);
 #endif

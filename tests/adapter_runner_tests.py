@@ -23,6 +23,7 @@ class AdapterTests(unittest.TestCase):
             entry['file'] = self.fixtures / entry['file']
         result = self.run_html((self.fixtures / 'page.html').read_text(), mapping)
         self.assertEqual(result['errors'], [])
+        self.assertEqual(result['title'], 'Fixture video & poster')
         self.assertEqual(result['poster']['url'], 'https://example.com/videos/images/poster.jpg')
         self.assertEqual(len(result['masters']), 1)
         self.assertEqual(len(result['mediaPlaylists']), 1)
@@ -47,6 +48,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(result['referenceSummary'], 'none')
 
     def test_posters_and_url_validation(self):
+        self.assertEqual(self.run_html('<title>  </title>')['title'], 'https://example.com/watch/1')
         self.assertIsNone(self.run_html('<video></video>')['poster'])
         result = self.run_html('<video poster="javascript:bad"></video><meta property="og:image" content="/image.jpg">')
         self.assertEqual(result['poster']['source'], "meta[property='og:image']")

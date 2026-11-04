@@ -34,7 +34,7 @@ class Document(HTMLParser):
     def __init__(self, html):
         super().__init__(convert_charrefs=True)
         self.elements = []
-        self.script = None
+        self.text_element = None
         self.feed(html)
         self.close()
 
@@ -43,16 +43,16 @@ class Document(HTMLParser):
             raise ValueError('HTML exceeds 20000-element limit')
         element = [tag, dict(attrs), '']
         self.elements.append(element)
-        if tag == 'script':
-            self.script = element
+        if tag in ('script', 'title'):
+            self.text_element = element
 
     def handle_endtag(self, tag):
-        if tag == 'script':
-            self.script = None
+        if self.text_element is not None and tag == self.text_element[0]:
+            self.text_element = None
 
     def handle_data(self, text):
-        if self.script is not None:
-            self.script[2] += text
+        if self.text_element is not None:
+            self.text_element[2] += text
 
     def values(self, source):
         selector = source['selector']
@@ -136,7 +136,16 @@ def run(config, html, page_url, playlists):
             except ValueError:
                 pass
     discovery = config['discovery']
-    result = {'pageUrl': page_url, 'poster': None, 'masters': [], 'mediaPlaylists': [], 'errors': []}
+    title = ''
+    title_settings = discovery.get('title', {'sources': [{'selector': 'title', 'text': True}], 'maxLength': 1024})
+    for source in title_settings['sources']:
+        for raw in document.values(source):
+            title = ' '.join(raw.split())[:min(1024, title_settings['maxLength'])]
+            if title:
+                break
+        if title:
+            break
+    result = {'pageUrl': page_url, 'title': title or page_url, 'poster': None, 'masters': [], 'mediaPlaylists': [], 'errors': []}
     for source in discovery['poster']['sources']:
         for raw in document.values(source):
             try:

@@ -90,7 +90,13 @@ void render(const GalleryPtr& state) {
     }
     gtk_widget_show_all(state->flow);
     std::string message;
-    if (state->page.total == 0) message = "No videos found. Add bookmarks with stream-gallery-library, then Refresh.";
+    if (state->page.total == 0) {
+#ifdef HAVE_DISCOVERY
+        message = "No videos found. Save a page from Discover, or add CLI bookmarks and press Refresh.";
+#else
+        message = "No videos found. Add bookmarks with stream-gallery-library, then Refresh.";
+#endif
+    }
     else message = std::to_string(state->offset + 1) + "–" + std::to_string(state->offset + state->page.items.size()) +
         " of " + std::to_string(state->page.total) + " videos";
     gtk_label_set_text(GTK_LABEL(state->status),message.c_str());
@@ -264,5 +270,16 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     }
     loadPage(state);
     return state->root;
+}
+std::function<void()> galleryRefreshCallback(GtkWidget* gallery) {
+    auto* stored = static_cast<GalleryPtr*>(g_object_get_data(G_OBJECT(gallery), "gallery-state"));
+    if (!stored) return {};
+    auto state = *stored;
+    return [state] {
+        if (state->closed) return;
+        if (state->debounce) { g_source_remove(state->debounce); state->debounce = 0; }
+        state->offset = 0;
+        loadPage(state);
+    };
 }
 }

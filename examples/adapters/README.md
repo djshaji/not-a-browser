@@ -10,7 +10,7 @@ python3 -B tools/adapter_runner.py examples/adapters/generic-hls.json \
 python3 -B tests/adapter_runner_tests.py
 ```
 
-The runner prints structured JSON containing a poster, master playlists, media
+The runner prints structured JSON containing a title, poster, master playlists, media
 playlists, reference classifications, inspection warnings, and per-candidate
 errors. It does not execute JavaScript or make network requests. A missing local
 playlist mapping produces an error entry. Fatal input errors exit with code 2;
@@ -22,7 +22,7 @@ simulates a redirect target: child references resolve against that URL, without
 inheriting its query parameters. It does not simulate an actual redirect request.
 
 The Python runner supports interface version 1 with id `generic-html-hls`.
-The configurable parts are source selectors and attributes, poster source order,
+The configurable parts are source selectors and attributes, title/poster source order,
 playlist extension, candidate count, and playlist byte limit. Selectors support
 tag names, attribute presence/equality, comma-separated alternatives, and the
 sample's `script:not([src])`. Quoted script strings support JSON escapes and
@@ -42,9 +42,12 @@ traversed. Unknown tags and unresolved HLS variables produce warnings; this is
 not a full HLS validator. Posters are URL metadata and are not downloaded.
 
 Desktop discovery embeds this same JSON profile at build time. Its rendered DOM
-extractor uses the configured candidate/poster selectors, source order, candidate
+extractor uses the configured title/candidate/poster selectors, source order, candidate
 limit, and extension. It returns structured page, candidate, and poster data to
-the native application. Rebuild after changing the profile; runtime adapter
+the native application. Titles have normalized whitespace and a maximum of 1,024
+characters (or the lower configured limit), with the page URL as fallback.
+Discover can save the page URL, title, and poster to Library; transient manifest
+URLs remain playback-only. Rebuild after changing the profile; runtime adapter
 installation and arbitrary adapter IDs are not implemented.
 
 Native workers fetch up to four candidates concurrently, validate HTTP/HTTPS

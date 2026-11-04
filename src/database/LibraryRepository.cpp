@@ -49,14 +49,18 @@ std::string canonicalizeUrl(const std::string& url) {
     std::string result(normalized); g_free(normalized); return result;
 }
 Video LibraryRepository::bookmark(const std::string& url, const std::string& title, const std::string& thumbnailUrl) {
+    return bookmarkWithStatus(url, title, thumbnailUrl).video;
+}
+BookmarkResult LibraryRepository::bookmarkWithStatus(const std::string& url, const std::string& title, const std::string& thumbnailUrl) {
     const auto canonical=canonicalizeUrl(url);
     if (!thumbnailUrl.empty() && !g_str_has_prefix(thumbnailUrl.c_str(), "file://"))
         (void)canonicalizeUrl(thumbnailUrl);
     Statement insert(db,"INSERT INTO videos(canonical_url,title,thumbnail_url) VALUES(?,?,?) ON CONFLICT(canonical_url) DO NOTHING");
     insert.text(1,canonical); insert.text(2,title); insert.text(3,thumbnailUrl); insert.step();
+    const bool created = sqlite3_changes(db.handle()) != 0;
     Statement select(db,"SELECT id,canonical_url,title,thumbnail_url FROM videos WHERE canonical_url=?");
     select.text(1,canonical); if (!select.step()) throw std::runtime_error("Bookmark was not saved");
-    return {select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3)};
+    return {{select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3)}, created};
 }
 std::vector<Video> LibraryRepository::videos() {
     Statement select(db,"SELECT id,canonical_url,title,thumbnail_url FROM videos ORDER BY id");

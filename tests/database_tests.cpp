@@ -24,7 +24,12 @@ int main() {
         {
             streamgallery::Database db(path.string());
             streamgallery::LibraryRepository library(db);
-            auto video=library.bookmark("HTTPS://Example.COM:443/watch?v=1#position","A concert");
+            auto saved=library.bookmarkWithStatus("HTTPS://Example.COM:443/watch?v=1#position","A concert", "https://example.com/poster.jpg");
+            check(saved.created);
+            auto video=saved.video;
+            auto duplicate=library.bookmarkWithStatus("https://example.com/watch?v=1", "Changed title", "https://example.com/changed.jpg");
+            check(!duplicate.created && duplicate.video.id == video.id);
+            check(duplicate.video.title == "A concert" && duplicate.video.thumbnailUrl == "https://example.com/poster.jpg");
             check(library.bookmark("https://example.com/watch?v=1","Duplicate").id==video.id);
             check(library.videos().size()==1);
             check(library.bookmark("https://example.com/watch?v=2","Other").id!=video.id);
@@ -67,6 +72,21 @@ int main() {
             check(library.videos().size()==1);
             check(library.videos()[0].title=="Other");
             check(scalar(db,"PRAGMA user_version")==2);
+        }
+        const auto savedPath = path.parent_path() / "saved.db";
+        {
+            streamgallery::Database db(savedPath.string());
+            streamgallery::LibraryRepository library(db);
+            check(library.bookmarkWithStatus("https://example.com/watch#player", "Saved video", "https://example.com/poster.jpg").created);
+        }
+        {
+            streamgallery::Database reopened(savedPath.string());
+            streamgallery::LibraryRepository library(reopened);
+            auto duplicate = library.bookmarkWithStatus("https://example.com/watch", "Replacement", "");
+            check(!duplicate.created && library.videos().size() == 1);
+            check(duplicate.video.canonicalUrl == "https://example.com/watch");
+            check(duplicate.video.title == "Saved video" && duplicate.video.thumbnailUrl == "https://example.com/poster.jpg");
+            check(library.page("Saved", streamgallery::VideoSort::Newest, 0).total == 1);
         }
         {
             streamgallery::Database large(":memory:");

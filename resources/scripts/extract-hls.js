@@ -51,5 +51,15 @@
         }
         if (poster) break;
     }
-    return {pageUrl: location.href, playlistCandidates: [...found], poster};
+    let title = '';
+    const titleSettings = adapter.discovery.title || {sources: [{selector: 'title', text: true}], maxLength: 1024};
+    for (const source of titleSettings.sources) {
+        for (const element of document.querySelectorAll(source.selector)) {
+            const text = source.text ? element.textContent : element.getAttribute(source.attribute);
+            if (text && text.trim()) { title = text.replace(/\s+/g, ' ').trim(); break; }
+        }
+        if (title) break;
+    }
+    title = [...title].slice(0, Math.min(1024, titleSettings.maxLength)).join('') || location.href;
+    return {pageUrl: location.href, title, playlistCandidates: [...found], poster};
 })

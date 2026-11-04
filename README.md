@@ -12,8 +12,9 @@ The current build provides:
 - Background database queries and thumbnail loading, cancellation of obsolete work, and a bounded thumbnail cache.
 - A command-line bookmark tool, plus database, thumbnail, player, DOM extraction, and UI tests.
 - Native libmpv playback and WebKitGTK webpage loading with DOM-based HLS extraction.
+- Save discovered pages to Library with their title and poster, duplicate detection, and automatic gallery refresh.
 
-Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. Adding a bookmark records the supplied metadata. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
+Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. CLI bookmarks record the supplied metadata; Discover can save a page's extracted title and poster. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
 
 ## Requirements
 
@@ -70,6 +71,18 @@ For the GTK shell only, also set `-DBUILD_LIBRARY=OFF`. Re-enable the desired op
 Without libsoup development files, configuration reports that only local `file://` thumbnails and existing cache entries are supported. After installing libsoup, rerun configuration and rebuild to enable HTTP thumbnails.
 
 ## Add bookmarks
+
+In **Discover**, load a page and choose **Save to Library** once its title appears.
+If playback switches to Player automatically, return to Discover to save the page.
+The app stores the webpage URL, page title (falling back to the URL), and poster
+URL. It shows **Saved to Library** or **Already in Library** and refreshes the
+gallery automatically. Existing bookmarks retain their original title and poster.
+Saving is available when the SQLite library is enabled and does not require a
+verified stream. A save already started finishes using the metadata captured at
+the click, even if you navigate away; its status does not appear on the new page.
+Errors appear beside the discovery status and the action can be retried.
+
+Alternatively, add bookmarks through the CLI:
 
 ```sh
 ./build/stream-gallery-library bookmark 'https://example.com/watch?v=1' 'Example video'
@@ -148,10 +161,10 @@ With the library, player, and discovery enabled, five C++ tests are registered:
 
 | Test | Coverage |
 | --- | --- |
-| `database` | Persistence, migrations, deduplication, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
+| `database` | Persistence, migrations, atomic new/duplicate bookmark reporting, metadata preservation, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
 | `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
 | `hls-discovery` | Master/media classification, reference resolution, local HTTP redirects, invalid/oversized responses, request headers, and cancellation without a display. |
-| `discovery` | Rendered JavaScript DOM, structured results, poster extraction, verified playlists, deduplication, cancellation during verification, destruction during extraction, and local webpage-to-HLS playback when ffmpeg is installed. |
+| `discovery` | Rendered DOM/title/poster extraction, verified playlists, cancellation, asynchronous saving/duplicates, metadata snapshots during navigation, save failure/retry, automatic gallery refresh, persisted library reopening, and local webpage-to-HLS playback when ffmpeg is installed. |
 | `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, and quit cleanup. |
 
 When Python 3 is available, CTest also registers `adapter-runner` for the local
@@ -166,7 +179,8 @@ For manual validation:
 2. Add more than 24 records to exercise pagination and supply an image URL to check thumbnails.
 3. Open a local video. Check muted startup, volume, seeking, fullscreen, EOF retention, and replay.
 4. Use **Discover → Load & Play** with a page exposing an `.m3u8` URL in its DOM. Check automatic native playback and **Stop loading**.
-5. Test shortcuts with a control focused and in fullscreen; use **Q** last because it quits immediately.
+5. Return to Discover and choose **Save to Library**. Confirm the page appears in Library without Refresh, save again to check duplicate feedback, then restart to check persistence.
+6. Test shortcuts with a control focused and in fullscreen; use **Q** last because it quits immediately.
 
 ## Webpage HLS discovery
 

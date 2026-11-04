@@ -35,6 +35,8 @@ Use RAII for ownership. Keep GTK access on the main thread and database/network/
 
 Preserve player lifecycle handling, GtkGLArea/OpenGL ownership, and asynchronous libmpv event delivery. Discovery embeds `examples/adapters/generic-hls.json`, extracts structured DOM results, and verifies HLS in workers before playback. It does not use yt-dlp or network interception. Cancel loading/extraction/verification on navigation and destruction, and reject stale callbacks. Resolve playlist references against the final response URL after redirects.
 
+Explicit library saves run in database workers using a snapshot of page metadata. Finish an initiated save across navigation, refresh the gallery on success, and suppress messages for stale pages or destroyed widgets. Use atomic new/duplicate reporting and preserve existing bookmark metadata.
+
 ## Testing Guidelines
 
 Tests use GLib assertions or exception-based checks; no external framework or coverage threshold is configured. Name files `*_tests.cpp`. CTest registers `database`, `thumbnails`, `hls-discovery`, `discovery`, and `ui-smoke` according to enabled features, plus `adapter-runner` when Python 3 is available. Cover persistence, migrations, deduplication, FTS, pagination, caching, HLS verification, DOM extraction/cancellation, playback lifecycle, shortcuts, and asynchronous UI behavior. Isolate test data with temporary XDG directories and prefer local fixtures/HTTP servers over live websites.

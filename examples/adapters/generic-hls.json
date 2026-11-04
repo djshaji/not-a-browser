@@ -11,6 +11,11 @@
     "notes": "pageUrl is the original webpage URL, not the local HTML file URI. Static HTML does not execute JavaScript. Honor the first valid HTML base href when resolving HTML URLs."
   },
   "discovery": {
+    "title": {
+      "sources": [{ "selector": "title", "text": true }],
+      "fallback": "page-url",
+      "maxLength": 1024
+    },
     "playlistCandidates": {
       "sources": [
         { "selector": "video[src], source[src]", "attribute": "src" },
@@ -75,6 +80,7 @@
   },
   "exampleOutput": {
     "pageUrl": "https://example.com/watch/123",
+    "title": "Example video",
     "poster": {
       "url": "https://example.com/images/poster.jpg",
       "source": "video[poster]"

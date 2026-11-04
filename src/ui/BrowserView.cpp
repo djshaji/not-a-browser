@@ -1,5 +1,9 @@
 #include "ui/BrowserView.hpp"
 #include "services/ThumbnailService.hpp"
+#ifdef HAVE_LIBRARY
+#include "database/LibraryRepository.hpp"
+#include <filesystem>
+#endif
 #include <webkit2/webkit2.h>
 #include <memory>
 #include <utility>
@@ -39,6 +43,12 @@ struct Browser {
     GtkWidget* play = gtk_button_new_with_label("Play stream");
     GtkWidget* poster = gtk_image_new_from_icon_name("video-x-generic", GTK_ICON_SIZE_DIALOG);
     GtkWidget* details = gtk_label_new("");
+    GtkWidget* pageTitle = gtk_label_new("");
+#ifdef HAVE_LIBRARY
+    GtkWidget* save = gtk_button_new_with_label("Save to Library");
+    GtkWidget* saveStatus = gtk_label_new("");
+    bool saving = false;
+#endif
     WebKitWebView* web = nullptr;
     Browser() {
         gchar* data = g_build_filename(g_get_user_data_dir(), "stream-gallery", "browser", nullptr);
@@ -50,6 +60,7 @@ struct Browser {
         g_free(data); g_free(cache);
     }
     StreamReady ready;
+    std::function<void()> librarySaved;
     GCancellable* cancellation = nullptr;
     guint timer = 0;
     unsigned generation = 0;
@@ -84,7 +95,74 @@ struct Browser {
         gtk_image_set_from_icon_name(GTK_IMAGE(poster), "video-x-generic", GTK_ICON_SIZE_DIALOG);
         gtk_widget_set_tooltip_text(poster, nullptr);
         gtk_label_set_text(GTK_LABEL(details), "");
+        gtk_label_set_text(GTK_LABEL(pageTitle), "");
+        gtk_widget_set_tooltip_text(pageTitle, nullptr);
+#ifdef HAVE_LIBRARY
+        gtk_widget_set_sensitive(save, FALSE);
+        gtk_label_set_text(GTK_LABEL(saveStatus), "");
+        gtk_widget_hide(saveStatus);
+#endif
     }
+#ifdef HAVE_LIBRARY
+    void updateSaveButton() {
+        const char* currentPage = webkit_web_view_get_uri(web);
+        gtk_widget_set_sensitive(save, !saving && httpUrl(result.pageUrl) && currentPage && result.pageUrl == currentPage);
+        gtk_button_set_label(GTK_BUTTON(save), saving ? "Saving…" : "Save to Library");
+    }
+    void saveMessage(const std::string& text) {
+        gtk_label_set_text(GTK_LABEL(saveStatus), text.c_str());
+        gtk_widget_set_tooltip_text(saveStatus, text.c_str());
+        gtk_widget_show(saveStatus);
+    }
+    void saveBookmark() {
+        updateSaveButton();
+        if (!gtk_widget_get_sensitive(save)) return;
+        // An explicit save finishes even if the user navigates away. Its metadata
+        // is immutable, and only the matching page receives completion messages.
+        struct SaveRequest {
+            BrowserPtr state;
+            unsigned generation;
+            std::string path, page, title, poster;
+        };
+        auto path = std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db";
+        auto* request = new SaveRequest{shared(), generation, path.string(), result.pageUrl,
+            result.title.empty() ? result.pageUrl : result.title, result.posterUrl};
+        saving = true;
+        updateSaveButton();
+        saveMessage("Saving to Library…");
+        GTask* task = g_task_new(nullptr, nullptr, +[](GObject*, GAsyncResult* async, gpointer) {
+            auto* task = G_TASK(async);
+            auto* request = static_cast<SaveRequest*>(g_task_get_task_data(task));
+            auto state = request->state;
+            GError* error = nullptr;
+            std::unique_ptr<BookmarkResult> saved(static_cast<BookmarkResult*>(g_task_propagate_pointer(task, &error)));
+            if (!state->closed) {
+                state->saving = false;
+                state->updateSaveButton();
+                if (request->generation == state->generation) {
+                    state->saveMessage(error ? std::string("Could not save to Library: ") + error->message :
+                        saved->created ? "Saved to Library" : "Already in Library");
+                }
+                if (saved && state->librarySaved) state->librarySaved();
+            }
+            g_clear_error(&error);
+        }, nullptr);
+        g_task_set_task_data(task, request, +[](gpointer data) { delete static_cast<SaveRequest*>(data); });
+        g_task_run_in_thread(task, +[](GTask* task, gpointer, gpointer data, GCancellable*) {
+            auto* request = static_cast<SaveRequest*>(data);
+            try {
+                std::filesystem::create_directories(std::filesystem::path(request->path).parent_path());
+                Database database(request->path);
+                LibraryRepository library(database);
+                auto result = std::make_unique<BookmarkResult>(library.bookmarkWithStatus(request->page, request->title, request->poster));
+                g_task_return_pointer(task, result.release(), +[](gpointer data) { delete static_cast<BookmarkResult*>(data); });
+            } catch (const std::exception& error) {
+                g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s", error.what());
+            }
+        });
+        g_object_unref(task);
+    }
+#endif
     void showSelection() {
         const char* selected = gtk_combo_box_get_active_id(GTK_COMBO_BOX(streams));
         if (!selected) return;
@@ -200,6 +278,13 @@ struct Browser {
                     g_error_free(error); g_clear_object(&value); return;
                 }
                 state->result.pageUrl = stringProperty(value, "pageUrl");
+                state->result.title = stringProperty(value, "title");
+                if (state->result.title.empty()) state->result.title = state->result.pageUrl;
+                gtk_label_set_text(GTK_LABEL(state->pageTitle), state->result.title.c_str());
+                gtk_widget_set_tooltip_text(state->pageTitle, state->result.title.c_str());
+#ifdef HAVE_LIBRARY
+                state->updateSaveButton();
+#endif
                 if (value && jsc_value_is_object(value)) {
                     JSCValue* poster = jsc_value_object_get_property(value, "poster");
                     const auto posterUrl = stringProperty(poster, "url");
@@ -259,10 +344,11 @@ struct Browser {
     }
 };
 }
-GtkWidget* createBrowserView(StreamReady onStream) {
+GtkWidget* createBrowserView(StreamReady onStream, std::function<void()> onLibrarySaved) {
     (void)stream_gallery_get_resource();
     auto state = std::make_shared<Browser>();
     state->ready = std::move(onStream);
+    state->librarySaved = std::move(onLibrarySaved);
     g_object_set_data_full(G_OBJECT(state->root), "browser-state", new BrowserPtr(state),
         +[](gpointer data) { delete static_cast<BrowserPtr*>(data); });
     GBytes* script = g_resources_lookup_data("/org/streamgallery/app/scripts/extract-hls.js", G_RESOURCE_LOOKUP_FLAGS_NONE, nullptr);
@@ -302,11 +388,30 @@ GtkWidget* createBrowserView(StreamReady onStream) {
     gtk_box_pack_start(GTK_BOX(results), state->play, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(results), state->poster, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(state->root), results, FALSE, FALSE, 0);
+    auto* metadata = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_label_set_ellipsize(GTK_LABEL(state->pageTitle), PANGO_ELLIPSIZE_END);
+    gtk_label_set_xalign(GTK_LABEL(state->pageTitle), 0);
+    gtk_box_pack_start(GTK_BOX(metadata), state->pageTitle, TRUE, TRUE, 0);
+#ifdef HAVE_LIBRARY
+    gtk_widget_set_sensitive(state->save, FALSE);
+    gtk_box_pack_start(GTK_BOX(metadata), state->save, FALSE, FALSE, 0);
+    g_signal_connect(state->save, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+        static_cast<Browser*>(data)->saveBookmark();
+    }), state.get());
+    gtk_widget_set_name(state->save, "discovery-save");
+#endif
+    gtk_box_pack_start(GTK_BOX(state->root), metadata, FALSE, FALSE, 0);
     gtk_label_set_ellipsize(GTK_LABEL(state->details), PANGO_ELLIPSIZE_END);
     gtk_box_pack_start(GTK_BOX(state->root), state->details, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(state->root), GTK_WIDGET(state->web), TRUE, TRUE, 0);
     gtk_label_set_ellipsize(GTK_LABEL(state->status), PANGO_ELLIPSIZE_MIDDLE);
     gtk_box_pack_start(GTK_BOX(state->root), state->status, FALSE, FALSE, 0);
+#ifdef HAVE_LIBRARY
+    gtk_label_set_ellipsize(GTK_LABEL(state->saveStatus), PANGO_ELLIPSIZE_MIDDLE);
+    gtk_widget_set_no_show_all(state->saveStatus, TRUE);
+    gtk_widget_set_name(state->saveStatus, "discovery-save-status");
+    gtk_box_pack_start(GTK_BOX(state->root), state->saveStatus, FALSE, FALSE, 0);
+#endif
     gtk_widget_set_sensitive(state->play, FALSE);
     g_signal_connect(state->streams, "changed", G_CALLBACK(+[](GtkComboBox*, gpointer data) {
         static_cast<Browser*>(data)->showSelection();
@@ -369,6 +474,7 @@ GtkWidget* createBrowserView(StreamReady onStream) {
     gtk_widget_set_name(state->status, "discovery-status");
     gtk_widget_set_name(state->poster, "discovery-poster");
     gtk_widget_set_name(state->details, "discovery-details");
+    gtk_widget_set_name(state->pageTitle, "discovery-title");
     return state->root;
 }
 void openBrowserPage(GtkWidget* browser, const std::string& url) {
