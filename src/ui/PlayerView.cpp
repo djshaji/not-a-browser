@@ -21,7 +21,14 @@ public:
     GtkWidget* position = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 1, 1);
     GtkWidget* volume = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
     GtkWidget* mute = gtk_toggle_button_new_with_label("Muted");
-    GtkWidget* play = gtk_button_new_with_label("Play / Pause");
+    GtkWidget* play = gtk_button_new_with_label("Play");
+    GtkWidget* speed = gtk_combo_box_text_new();
+    GtkWidget* reverse = gtk_toggle_button_new();
+    GtkWidget* fast = gtk_toggle_button_new();
+    bool paused = false;
+    bool backwards = false;
+    double playbackSpeed = 1;
+
     mpv_handle* mpv = nullptr;
     mpv_render_context* renderer = nullptr;
     guint timer = 0;
@@ -63,12 +70,58 @@ public:
         gtk_widget_set_name(volume, "player-volume");
         gtk_widget_set_name(mute, "player-mute");
         gtk_widget_set_size_request(volume, 120, -1);
-        auto* speed = gtk_combo_box_text_new();
+        gtk_widget_set_name(speed, "player-speed");
         for (const char* value : {"0.5", "1.0", "1.5", "2.0"})
             gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(speed), value);
         gtk_combo_box_set_active(GTK_COMBO_BOX(speed), 1);
         auto* full = gtk_button_new_with_label("Fullscreen");
-        gtk_box_pack_start(GTK_BOX(controls), play, FALSE, FALSE, 0);
+        auto* transport = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
+        gtk_widget_set_halign(transport, GTK_ALIGN_CENTER);
+        gtk_widget_set_name(transport, "player-transport");
+        auto* rewind = gtk_button_new();
+        auto* forward = gtk_button_new();
+        auto styleButton = [](GtkWidget* button, const char* icon, const char* label,
+                              const char* name, const char* tooltip, int size) {
+            gtk_button_set_label(GTK_BUTTON(button), label);
+            auto* image = gtk_image_new_from_icon_name(icon, GTK_ICON_SIZE_BUTTON);
+            gtk_image_set_pixel_size(GTK_IMAGE(image), size == 96 ? 34 : 22);
+            gtk_button_set_image(GTK_BUTTON(button), image);
+            gtk_button_set_always_show_image(GTK_BUTTON(button), TRUE);
+            gtk_button_set_image_position(GTK_BUTTON(button), GTK_POS_TOP);
+            gtk_widget_set_name(button, name);
+            gtk_widget_set_tooltip_text(button, tooltip);
+            atk_object_set_name(gtk_widget_get_accessible(button), tooltip);
+            gtk_style_context_add_class(gtk_widget_get_style_context(button), "transport-button");
+            gtk_widget_set_size_request(button, size, size);
+            gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
+        };
+        styleButton(rewind, "media-skip-backward-symbolic", "−5 min", "player-rewind", "Rewind 5 minutes", 68);
+        styleButton(reverse, "media-seek-backward-symbolic", "2×", "player-reverse", "Play backwards at 2×; click again for normal playback", 68);
+        styleButton(play, "media-playback-start-symbolic", "Play", "player-play-pause", "Play", 96);
+        styleButton(fast, "media-seek-forward-symbolic", "2×", "player-fast-forward", "Play forwards at 2×; click again for normal playback", 68);
+        styleButton(forward, "media-skip-forward-symbolic", "+5 min", "player-forward", "Forward 5 minutes", 68);
+        gtk_style_context_add_class(gtk_widget_get_style_context(play), "transport-primary");
+        for (auto* button : {rewind, reverse, play, fast, forward})
+            gtk_box_pack_start(GTK_BOX(transport), button, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(root), transport, FALSE, FALSE, 0);
+        gtk_widget_set_halign(controls, GTK_ALIGN_CENTER);
+        for (auto* button : {rewind, forward}) {
+            g_signal_connect(button, "clicked", G_CALLBACK((+[](GtkButton* button, gpointer p) {
+                const char* offset = g_strcmp0(gtk_widget_get_name(GTK_WIDGET(button)), "player-rewind") == 0 ? "-300" : "300";
+                const char* args[] = {"seek", offset, "relative", nullptr};
+                static_cast<PlayerView*>(p)->command(args);
+            })), this);
+        }
+        for (auto* button : {reverse, fast}) {
+            g_signal_connect(button, "clicked", G_CALLBACK((+[](GtkButton* button, gpointer p) {
+                auto* self = static_cast<PlayerView*>(p);
+                if (self->updating) return;
+                const bool reverse = GTK_WIDGET(button) == self->reverse;
+                const bool normal = self->playbackSpeed == 2 && self->backwards == reverse;
+                self->setPlayback(!normal && reverse, normal ? 1 : 2);
+                const char* args[] = {"set", "pause", "no", nullptr}; self->command(args);
+            })), this);
+        }
         gtk_box_pack_start(GTK_BOX(controls), mute, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(controls), gtk_label_new("Volume"), FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(controls), volume, FALSE, FALSE, 0);
@@ -113,6 +166,8 @@ public:
             mpv_observe_property(mpv, 4, "volume", MPV_FORMAT_DOUBLE);
             mpv_observe_property(mpv, 5, "mute", MPV_FORMAT_FLAG);
             mpv_observe_property(mpv, 6, "eof-reached", MPV_FORMAT_FLAG);
+            mpv_observe_property(mpv, 7, "speed", MPV_FORMAT_DOUBLE);
+            mpv_observe_property(mpv, 8, "play-direction", MPV_FORMAT_STRING);
         }
         g_signal_connect(area, "realize", G_CALLBACK((+[](GtkWidget*, gpointer p) { static_cast<PlayerView*>(p)->realize(); })), this);
         g_signal_connect(area, "unrealize", G_CALLBACK((+[](GtkWidget*, gpointer p) { static_cast<PlayerView*>(p)->unrealize(); })), this);
@@ -166,7 +221,8 @@ public:
         g_signal_connect(speed, "changed", G_CALLBACK((+[](GtkComboBox* combo, gpointer p) {
             const double speeds[] = {0.5, 1, 1.5, 2};
             int index = gtk_combo_box_get_active(combo);
-            if (index >= 0 && index < 4) static_cast<PlayerView*>(p)->set("speed", speeds[index]);
+            auto* self = static_cast<PlayerView*>(p);
+            if (!self->updating && index >= 0 && index < 4) self->setPlayback(false, speeds[index]);
         })), this);
         g_signal_connect(full, "clicked", G_CALLBACK((+[](GtkButton*, gpointer p) {
             auto* self = static_cast<PlayerView*>(p);
@@ -228,7 +284,34 @@ public:
         }
     }
     void toggleFullscreen() { setFullscreen(!fullscreen); }
+    void updatePlaybackControls() {
+        updating = true;
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(reverse), backwards && playbackSpeed == 2);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(fast), !backwards && playbackSpeed == 2);
+        const double speeds[] = {0.5, 1, 1.5, 2};
+        int selected = -1;
+        for (int i = 0; i < 4; ++i) if (playbackSpeed == speeds[i]) selected = i;
+        gtk_combo_box_set_active(GTK_COMBO_BOX(speed), selected);
+        updating = false;
+    }
+    void setPlayback(bool backward, double rate) {
+        const char* direction[] = {"set", "play-direction", backward ? "backward" : "forward", nullptr};
+        command(direction); set("speed", rate);
+    }
+    void updatePlayButton() {
+        const char* label = atEnd ? "Replay" : (paused ? "Play" : "Pause");
+        gtk_button_set_label(GTK_BUTTON(play), label);
+        auto* image = gtk_button_get_image(GTK_BUTTON(play));
+        gtk_image_set_from_icon_name(GTK_IMAGE(image), atEnd ? "media-playlist-repeat-symbolic" :
+            (paused ? "media-playback-start-symbolic" : "media-playback-pause-symbolic"), GTK_ICON_SIZE_BUTTON);
+        gtk_image_set_pixel_size(GTK_IMAGE(image), 34);
+        gtk_widget_set_tooltip_text(play, label);
+        atk_object_set_name(gtk_widget_get_accessible(play), label);
+    }
     void togglePlayback() {
+        if (backwards || playbackSpeed == 2) {
+            setPlayback(false, 1);
+        }
         if (atEnd) {
             const char* seek[] = {"seek", "0", "absolute+exact", nullptr}; command(seek);
             const char* resume[] = {"set", "pause", "no", nullptr}; command(resume);
@@ -322,11 +405,13 @@ public:
         if (loaded) { const char* save[] = {"write-watch-later-config", nullptr}; command(save); }
         loaded = false;
         atEnd = false;
+        setPlayback(false, 1);
         duration = 0;
         gtk_widget_set_sensitive(position, FALSE);
         mpv_set_property_async(mpv, 0, "referrer", MPV_FORMAT_STRING, &referrer);
         mpv_set_property_async(mpv, 0, "user-agent", MPV_FORMAT_STRING, &userAgent);
         const char* args[] = {"loadfile", path, "replace", nullptr}; command(args);
+        const char* resume[] = {"set", "pause", "no", nullptr}; command(resume);
         message("Loading…");
     }
     void realize() {
@@ -393,11 +478,15 @@ public:
                         else if (event->reply_userdata == 4)
                             gtk_range_set_value(GTK_RANGE(volume), value);
                         updating = false;
+                        if (event->reply_userdata == 7) {
+                            playbackSpeed = value; updatePlaybackControls();
+                        }
                     }
                 } else if (property->data && property->format == MPV_FORMAT_FLAG) {
                     bool active = *static_cast<int*>(property->data) != 0;
-                    if (event->reply_userdata == 3)
-                        gtk_button_set_label(GTK_BUTTON(play), atEnd ? "Replay" : (active ? "Play" : "Pause"));
+                    if (event->reply_userdata == 3) {
+                        paused = active; updatePlayButton();
+                    }
                     else if (event->reply_userdata == 5) {
                         updating = true;
                         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(mute), active);
@@ -408,13 +497,21 @@ public:
                         atEnd = active;
                         if (!atEnd && wasAtEnd && loaded) {
                             message("Playing");
-                            gtk_button_set_label(GTK_BUTTON(play), "Pause");
+                            updatePlayButton();
                         }
                         if (atEnd) {
                             message("Playback ended — video kept open");
-                            gtk_button_set_label(GTK_BUTTON(play), "Replay");
+                            updatePlayButton();
                         }
                     }
+                }
+            }
+            if (event->event_id == MPV_EVENT_PROPERTY_CHANGE && event->reply_userdata == 8) {
+                auto* property = static_cast<mpv_event_property*>(event->data);
+                if (property->data && property->format == MPV_FORMAT_STRING) {
+                    backwards = g_strcmp0(*static_cast<char**>(property->data), "backward") == 0 ||
+                        g_strcmp0(*static_cast<char**>(property->data), "-") == 0;
+                    updatePlaybackControls();
                 }
             }
             if (event->event_id == MPV_EVENT_FILE_LOADED) { loaded = true; message("Playing"); }

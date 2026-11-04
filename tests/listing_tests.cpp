@@ -89,10 +89,22 @@ int main(int argc, char** argv) {
     const std::string base = uri; g_free(uri); g_slist_free_full(uris, reinterpret_cast<GDestroyNotify>(g_uri_unref));
     auto* app = gtk_application_new("org.streamgallery.ListingTest", G_APPLICATION_NON_UNIQUE);
     g_assert_true(g_application_register(G_APPLICATION(app), nullptr, &error)); g_assert_no_error(error);
+    const auto profilesDirectory = std::filesystem::path(directory) / "notabrowser";
+    std::filesystem::create_directory(profilesDirectory);
+    std::ofstream(profilesDirectory / "custom.json") << R"({
+        "interfaceVersion":1,"name":"Custom fixture profile",
+        "selectors":{"card":".video-card","link":"a.video-link[href]","title":".video-title","poster":"img"},
+        "pagination":{"type":"link","selector":"a[rel='next'][href]"},
+        "limits":{"maxItemsPerPage":24,"waitMilliseconds":8000}})";
     auto* window = streamgallery::createMainWindow(app); gtk_widget_show_all(window);
     auto* listing = find(window, "listing-browser"); auto* browser = find(window, "discovery-browser");
     observedListing = listing;
     g_assert_nonnull(listing); g_assert_nonnull(browser);
+    auto* customProfile = GTK_COMBO_BOX(find(listing, "listing-profile"));
+    gtk_combo_box_set_active(customProfile, 2);
+    gchar* profileName = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(customProfile));
+    g_assert_cmpstr(profileName, ==, "Custom fixture profile"); g_free(profileName);
+
     auto* tabs = GTK_NOTEBOOK(gtk_widget_get_ancestor(listing, GTK_TYPE_NOTEBOOK));
     gtk_notebook_set_current_page(tabs, 1);
     auto* stack = GTK_STACK(gtk_widget_get_ancestor(GTK_WIDGET(tabs), GTK_TYPE_STACK)); gtk_stack_set_visible_child_name(stack, "browser");
@@ -162,6 +174,20 @@ int main(int argc, char** argv) {
     waitFor([&] { return requests["/delayed"] >= 2 && streamgallery::listingResult(listing).busy; });
     click(listing, "listing-stop"); streamgallery::openListingPage(listing, base + "catalog/one");
     waitFor([&] { auto result = streamgallery::listingResult(listing); return !result.busy && result.items.size() == 2; });
+    // Reload discovers additions, preserves selection by filename, and removes deleted entries.
+    std::filesystem::copy_file(profilesDirectory / "custom.json", profilesDirectory / "aaa.json");
+    gtk_combo_box_set_active(customProfile, 2);
+    click(listing, "listing-reload-profiles");
+    g_assert_cmpint(gtk_combo_box_get_active(customProfile), ==, 3);
+    g_assert_true(streamgallery::listingResult(listing).items.empty());
+    std::filesystem::remove(profilesDirectory / "custom.json");
+    click(listing, "listing-reload-profiles");
+    g_assert_cmpint(gtk_combo_box_get_active(customProfile), ==, 0);
+    click(listing, "listing-extract");
+    waitFor([&] { auto result = streamgallery::listingResult(listing); return !result.busy && result.items.size() == 2; });
+    // HLS reload leaves extraction explicitly user-triggered.
+    click(browser, "discovery-reload-profiles");
+    g_assert_true(streamgallery::browserDiscoveryResult(browser).playlists.empty());
     const auto finalResult = streamgallery::listingResult(listing);
     g_assert_cmpstr(finalResult.items[0].url.c_str(), ==, one.c_str());
     streamgallery::openListingPage(listing, base + "delayed");

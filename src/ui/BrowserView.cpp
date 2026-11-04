@@ -1,5 +1,6 @@
 #include "ui/BrowserView.hpp"
 #include "services/ThumbnailService.hpp"
+#include "services/AdapterProfiles.hpp"
 #ifdef HAVE_LIBRARY
 #include "services/BookmarkService.hpp"
 #endif
@@ -78,6 +79,26 @@ struct Browser {
     void message(const char* text) {
         gtk_label_set_text(GTK_LABEL(status), text);
         gtk_widget_set_tooltip_text(status, text);
+    }
+    void loadProfile() {
+        script.clear();
+        GBytes* source = g_resources_lookup_data("/org/streamgallery/app/scripts/extract-hls.js", G_RESOURCE_LOOKUP_FLAGS_NONE, nullptr);
+        if (source) {
+            gsize size = 0;
+            const char* text = static_cast<const char*>(g_bytes_get_data(source, &size));
+            script.assign(text, size); g_bytes_unref(source);
+        }
+        GBytes* adapter = g_resources_lookup_data("/org/streamgallery/app/adapters/generic-hls.json", G_RESOURCE_LOOKUP_FLAGS_NONE, nullptr);
+        const auto customProfile = loadHlsProfile();
+        if (!customProfile.empty()) {
+            script += "(" + customProfile + ");";
+            if (adapter) g_bytes_unref(adapter);
+        } else if (adapter) {
+            gsize size = 0;
+            const char* text = static_cast<const char*>(g_bytes_get_data(adapter, &size));
+            script += "(" + std::string(text, size) + ");";
+            g_bytes_unref(adapter);
+        } else script.clear();
     }
     void cancel() {
         ++generation;
@@ -324,27 +345,23 @@ GtkWidget* createBrowserView(StreamReady onStream, std::function<void()> onLibra
     state->librarySaved = std::move(onLibrarySaved);
     g_object_set_data_full(G_OBJECT(state->root), "browser-state", new BrowserPtr(state),
         +[](gpointer data) { delete static_cast<BrowserPtr*>(data); });
-    GBytes* script = g_resources_lookup_data("/org/streamgallery/app/scripts/extract-hls.js", G_RESOURCE_LOOKUP_FLAGS_NONE, nullptr);
-    if (script) {
-        gsize size = 0;
-        const char* text = static_cast<const char*>(g_bytes_get_data(script, &size));
-        state->script.assign(text, size); g_bytes_unref(script);
-    }
-    GBytes* adapter = g_resources_lookup_data("/org/streamgallery/app/adapters/generic-hls.json", G_RESOURCE_LOOKUP_FLAGS_NONE, nullptr);
-    if (adapter) {
-        gsize size = 0;
-        const char* text = static_cast<const char*>(g_bytes_get_data(adapter, &size));
-        state->script += "(" + std::string(text, size) + ");";
-        g_bytes_unref(adapter);
-    } else state->script.clear();
+    state->loadProfile();
     auto* toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     auto* load = gtk_button_new_with_label("Load & Play");
     auto* stop = gtk_button_new_with_label("Stop loading");
     auto* extract = gtk_button_new_with_label("Extract & Play");
+    auto* reload = gtk_button_new_with_label("Reload profiles");
+    gtk_widget_set_name(reload, "discovery-reload-profiles");
+    g_signal_connect(reload, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+        auto* state = static_cast<Browser*>(data);
+        state->cancel(); state->failed = true; webkit_web_view_stop_loading(state->web);
+        state->clearStreams(); state->loadProfile();
+        state->message("Profiles reloaded — choose Extract & Play to use the updated settings");
+    }), state.get());
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->address), "Webpage URL");
     gtk_entry_set_max_length(GTK_ENTRY(state->address), 8192);
     gtk_box_pack_start(GTK_BOX(toolbar), state->address, TRUE, TRUE, 0);
-    for (auto* widget : {load, stop, extract}) gtk_box_pack_start(GTK_BOX(toolbar), widget, FALSE, FALSE, 0);
+    for (auto* widget : {load, stop, extract, reload}) gtk_box_pack_start(GTK_BOX(toolbar), widget, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(state->root), toolbar, FALSE, FALSE, 0);
     auto* results = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_hexpand(state->streams, TRUE);

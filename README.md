@@ -14,6 +14,7 @@ The current build provides:
 - Native libmpv playback and WebKitGTK webpage loading with DOM-based HLS extraction.
 - Save discovered pages to Library with their title and poster, duplicate detection, and automatic gallery refresh.
 - Listing-card discovery with two sample JSON profiles, per-video Play/Save actions, and bounded next-link/load-more pagination.
+- User-provided listing profiles and a custom HLS discovery profile loaded from `~/.config/notabrowser/`, without rebuilding.
 
 Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. CLI bookmarks record the supplied metadata; Discover can save a page's extracted title and poster. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
 
@@ -69,7 +70,7 @@ cmake --build build
 
 For the GTK shell only, also set `-DBUILD_LIBRARY=OFF`. Re-enable the desired options when returning to the full build.
 
-Without libsoup development files, configuration reports that only local `file://` thumbnails and existing cache entries are supported. After installing libsoup, rerun configuration and rebuild to enable HTTP thumbnails.
+In builds without discovery, missing libsoup development files cause configuration to report that only local `file://` thumbnails and existing cache entries are supported. After installing libsoup, rerun configuration and rebuild to enable HTTP thumbnails.
 
 ## Add bookmarks
 
@@ -116,7 +117,7 @@ Thumbnail decoding and database access run outside the GTK main thread. Only the
 
 Open **Player**, then choose **Open file…**, or enter a direct HTTP/HTTPS media URL and choose **Open URL**. libmpv handles local files, ordinary MP4 URLs, and HLS streams. For a webpage URL, use **Discover → Load & Play** or the selected bookmark's discovery action.
 
-Playback starts muted. Use **M** or the mute button to enable audio. Volume changes preserve mute state. Controls provide play/pause, seeking, volume, and playback speeds of 0.5×, 1×, 1.5×, and 2×. Seeking depends on the stream; live streams may have a limited seek window.
+Playback starts muted. Use **M** or the mute button to enable audio. Volume changes preserve mute state. The centered transport row provides **−5 min**, **reverse 2×**, a large round **Play/Pause** button, **forward 2×**, and **+5 min**, in that order. The middle button changes to **Replay** at the end. Click an active 2× button again to return to normal forward playback. Play/Pause and the **P** shortcut reset fast/reverse mode to normal speed while toggling playback. Volume, speed selection (0.5×, 1×, 1.5×, 2×), and fullscreen sit below the transport row. Selecting a speed returns to forward playback. Reverse playback uses libmpv and depends on the file/stream supporting reverse decoding; it may be slower or unavailable for some streams. Seeking depends on the stream; live streams may have a limited seek window.
 
 At the end of a video, the file stays loaded with its final frame visible. **P** or **Replay** starts it again. Fullscreen shows only the video; exiting restores the previous page and controls.
 
@@ -147,6 +148,7 @@ Shortcuts work throughout the main window, including in fullscreen and while tex
 | Library | `$XDG_DATA_HOME/stream-gallery/library.db` | `~/.local/share/stream-gallery/library.db` |
 | Thumbnails | `$XDG_CACHE_HOME/stream-gallery/thumbnails/` | `~/.cache/stream-gallery/thumbnails/` |
 | Playback resume | `$XDG_STATE_HOME/stream-gallery/watch-later/` | `~/.local/state/stream-gallery/watch-later/` |
+| User profiles | `$XDG_CONFIG_HOME/notabrowser/` | `~/.config/notabrowser/` |
 | Browser website data | `$XDG_DATA_HOME/stream-gallery/browser/` | `~/.local/share/stream-gallery/browser/` |
 | Browser cache | `$XDG_CACHE_HOME/stream-gallery/browser/` | `~/.cache/stream-gallery/browser/` |
 
@@ -158,15 +160,16 @@ Schema version 2 adds thumbnail URLs and a title-sort index. Existing version-1 
 ctest --test-dir build --output-on-failure
 ```
 
-With the library, player, and discovery enabled, six C++ tests are registered:
+With the library, player, and discovery enabled, seven C++ tests are registered:
 
 | Test | Coverage |
 | --- | --- |
 | `database` | Persistence, migrations, atomic new/duplicate bookmark reporting, metadata preservation, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
 | `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
+| `adapter-profiles` | Config-directory discovery, filename ordering, listing pagination types, HLS override loading, and rejection of invalid, unsupported, and oversized profiles. |
 | `hls-discovery` | Master/media classification, reference resolution, local HTTP redirects, invalid/oversized responses, request headers, and cancellation without a display. |
 | `discovery` | Rendered DOM/title/poster extraction, verified playlists, cancellation, asynchronous saving/duplicates, metadata snapshots during navigation, save failure/retry, automatic gallery refresh, persisted library reopening, and local webpage-to-HLS playback when ffmpeg is installed. |
-| `listings` | Two local listing fixtures, relative links/posters, missing titles, invalid URLs, per-card Play/Save, deduplication, next-link loops, page limits, dynamic button pagination, delayed DOM insertion, Stop/navigation, and destruction during extraction. |
+| `listings` | Config-loaded profile selection, two local listing fixtures, relative links/posters, missing titles, invalid URLs, per-card Play/Save, deduplication, next-link loops, page limits, dynamic button pagination, delayed DOM insertion, Stop/navigation, and destruction during extraction. |
 | `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, and quit cleanup. |
 
 When Python 3 is available, CTest also registers `adapter-runner` for the local
@@ -207,7 +210,7 @@ build option. No stream URLs are saved from the listing.
 
 The two embedded [sample profiles](examples/adapters/README.md#listing-profiles)
 target the local fixture layouts. They are examples, not automatic support for
-arbitrary websites: edit their selectors to match a target site and rebuild.
+arbitrary websites. Copy one to the [user profile directory](#user-profile-files) and edit its selectors to match a target site. Changes to bundled profiles require a rebuild.
 Both views share the browser website session. Listing pages do not automatically
 trigger native playback.
 
@@ -220,6 +223,37 @@ page loading has a 30-second timeout. Choose **Find videos** to recheck the curr
 DOM, or **Stop** to cancel pending work while retaining collected cards. Loading
 a new URL or changing profile clears the result set. Infinite scrolling and
 production website profiles remain future work.
+
+## User profile files
+
+Place JSON profiles directly in `~/.config/notabrowser/` (or
+`$XDG_CONFIG_HOME/notabrowser/` when set), then choose **Reload profiles** in the relevant Discover tab.
+Copy `examples/adapters/listing-links.json` or `listing-load-more.json` to a
+new `.json` filename and edit its `name`, selectors, and pagination settings.
+
+For example, from the repository root:
+
+```sh
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/notabrowser"
+cp examples/adapters/listing-links.json "${XDG_CONFIG_HOME:-$HOME/.config}/notabrowser/my-site.json"
+```
+
+Edit `my-site.json`, choose **Reload profiles**, and select its name in
+**Discover → Video listings** before loading a listing URL.
+
+Valid files appear after the built-in profiles in the listing profile chooser,
+sorted by filename. Each profile declares `pagination.type` as `link` or `button`.
+
+To customize video-page discovery, copy `examples/adapters/generic-hls.json` as
+`generic-hls.json` in the same directory and edit its discovery settings. Keep
+`interfaceVersion: 1` and `id: "generic-html-hls"`. This overrides the built-in
+HLS profile; it does not add a separate HLS chooser or automatic site matching.
+
+Files must be valid JSON with the required fields. Invalid, unsupported, or
+oversized files (over 128 KiB) are ignored with a terminal diagnostic; HLS falls
+back to the built-in profile. Up to 64 valid custom listing profiles are loaded.
+Native network, pagination, and extraction safety limits still apply. Editing
+user files requires **Reload profiles** in the relevant tab, but no restart or rebuild. Reloading stops current discovery and clears its results; choose **Find videos** or **Extract & Play** to extract again. The listing selection is preserved by filename when available, otherwise it falls back to Next-page links.
 
 ## Roadmap and contribution
 

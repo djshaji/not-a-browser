@@ -39,14 +39,15 @@ GtkWidget* findNamed(GtkWidget* root, const char* name) {
 }
 #endif
 #if defined(HAVE_LIBRARY_TESTS) || defined(HAVE_PLAYER_TESTS)
-void waitFor(const std::function<bool()>& predicate) {
+void waitUntil(int line, const std::function<bool()>& predicate) {
     const gint64 deadline = g_get_monotonic_time() + 10 * G_TIME_SPAN_SECOND;
     while (!predicate() && g_get_monotonic_time() < deadline) {
         while (gtk_events_pending()) gtk_main_iteration();
         g_usleep(1000);
     }
-    g_assert_true(predicate());
+    if (!predicate()) g_error("UI check at line %d timed out", line);
 }
+#define waitFor(...) waitUntil(__LINE__, __VA_ARGS__)
 #endif
 }
 int main(int argc, char** argv) {
@@ -244,6 +245,45 @@ int main(int argc, char** argv) {
         waitFor([&] { return g_strcmp0(gtk_button_get_label(playPause), "Pause") == 0; });
         waitFor([&] { return g_strcmp0(gtk_button_get_label(playPause), "Replay") == 0; });
         g_assert_true(gtk_widget_get_sensitive(seek));
+        // A seekable ten-minute fixture verifies the new transport controls.
+        std::string longVideo = "YUV4MPEG2 W16 H16 F2:1 Ip A1:1 C420jpeg\n";
+        for (int frame = 0; frame < 1200; ++frame)
+            longVideo += "FRAME\n" + std::string(256, static_cast<char>(100)) + std::string(128, static_cast<char>(128));
+        gchar* longFixture = g_build_filename(fixtureDirectory, "transport.y4m", nullptr);
+        g_assert_true(g_file_set_contents(longFixture, longVideo.data(), longVideo.size(), nullptr));
+        streamgallery::openPlayerFile(playerView, longFixture);
+        waitFor([&] { return g_strcmp0(gtk_button_get_label(playPause), "Pause") == 0 &&
+            gtk_adjustment_get_upper(gtk_range_get_adjustment(GTK_RANGE(seek))) > 590; });
+        auto click = [&](const char* name) { gtk_button_clicked(GTK_BUTTON(findNamed(window, name))); };
+        auto* reverse = GTK_TOGGLE_BUTTON(findNamed(window, "player-reverse"));
+        auto* fast = GTK_TOGGLE_BUTTON(findNamed(window, "player-fast-forward"));
+        auto* speed = GTK_COMBO_BOX(findNamed(window, "player-speed"));
+        click("player-forward");
+        waitFor([&] { return gtk_range_get_value(GTK_RANGE(seek)) > 290; });
+        click("player-rewind");
+        waitFor([&] { return gtk_range_get_value(GTK_RANGE(seek)) < 10; });
+        click("player-forward");
+        waitFor([&] { return gtk_range_get_value(GTK_RANGE(seek)) > 290; });
+        const double beforeReverse = gtk_range_get_value(GTK_RANGE(seek));
+        click("player-reverse");
+        waitFor([&] { return gtk_toggle_button_get_active(reverse) && gtk_combo_box_get_active(speed) == 3; });
+        waitFor([&] { return gtk_range_get_value(GTK_RANGE(seek)) < beforeReverse - 1; });
+        click("player-fast-forward");
+        waitFor([&] { return gtk_toggle_button_get_active(fast) && !gtk_toggle_button_get_active(reverse); });
+        click("player-fast-forward");
+        waitFor([&] { return !gtk_toggle_button_get_active(fast) && gtk_combo_box_get_active(speed) == 1; });
+        click("player-play-pause");
+        waitFor([&] { return g_strcmp0(gtk_button_get_label(playPause), "Play") == 0; });
+        click("player-play-pause");
+        waitFor([&] { return g_strcmp0(gtk_button_get_label(playPause), "Pause") == 0; });
+        if (const char* screenshot = g_getenv("STREAM_GALLERY_PLAYER_SCREENSHOT")) {
+            GdkPixbuf* pixels = gdk_pixbuf_get_from_window(gtk_widget_get_window(window), 0, 0,
+                gtk_widget_get_allocated_width(window), gtk_widget_get_allocated_height(window));
+            g_assert_nonnull(pixels);
+            g_assert_true(gdk_pixbuf_save(pixels, screenshot, "png", nullptr, nullptr));
+            g_object_unref(pixels);
+        }
+        g_remove(longFixture); g_free(longFixture);
         g_remove(fixture);
         g_rmdir(fixtureDirectory);
         g_free(fixture);

@@ -1,5 +1,6 @@
 #include "ui/ListingView.hpp"
 #include "services/HlsDiscovery.hpp"
+#include "services/AdapterProfiles.hpp"
 #include "services/ThumbnailService.hpp"
 #ifdef HAVE_LIBRARY
 #include "services/BookmarkService.hpp"
@@ -57,6 +58,11 @@ struct Listing {
     WebKitWebView* web;
     std::function<void(const std::string&)> openVideo;
     std::function<void()> librarySaved;
+    std::vector<AdapterProfile> profiles;
+    const AdapterProfile& selectedProfile() const {
+        const int index = gtk_combo_box_get_active(GTK_COMBO_BOX(profile));
+        return profiles.at(index >= 0 ? index : 0);
+    }
     ListingResult result;
     std::set<std::string> seen, visited;
     std::string nextUrl;
@@ -80,7 +86,25 @@ struct Listing {
         gtk_widget_set_sensitive(next, !result.busy && result.hasNext);
         gtk_widget_set_sensitive(extract, !result.busy && loaded);
         gtk_widget_set_sensitive(stop, result.busy);
-        gtk_button_set_label(GTK_BUTTON(next), gtk_combo_box_get_active(GTK_COMBO_BOX(profile)) == 1 ? "Load more" : "Next page");
+        gtk_button_set_label(GTK_BUTTON(next), selectedProfile().button ? "Load more" : "Next page");
+    }
+    void reloadProfiles() {
+        const auto previous = profiles.empty() ? std::string{} : selectedProfile().filename;
+        if (!profiles.empty()) reset();
+        g_signal_handlers_block_matched(profile, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, this);
+        gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(profile));
+        profiles = {
+            {"Next-page links", resource("/org/streamgallery/app/adapters/listing-links.json"), false, "builtin:listing-links"},
+            {"Load-more button", resource("/org/streamgallery/app/adapters/listing-load-more.json"), true, "builtin:listing-load-more"}};
+        for (auto& profile : loadListingProfiles()) profiles.push_back(std::move(profile));
+        for (const auto& entry : profiles)
+            gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(profile), entry.name.c_str());
+        int selected = 0;
+        for (std::size_t i = 0; i < profiles.size(); ++i)
+            if (profiles[i].filename == previous) selected = static_cast<int>(i);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(profile), selected);
+        g_signal_handlers_unblock_matched(profile, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, this);
+        controls();
     }
     void cancel() {
         const auto cancelledToken = std::to_string(generation);
@@ -185,8 +209,7 @@ struct Listing {
         cancel(); stopped = false;
         result.busy = true; controls(); message(loadMore ? "Waiting for more video cards…" : "Finding video cards…");
         cancellation = g_cancellable_new();
-        const bool button = gtk_combo_box_get_active(GTK_COMBO_BOX(profile)) == 1;
-        const auto json = resource(button ? "/org/streamgallery/app/adapters/listing-load-more.json" : "/org/streamgallery/app/adapters/listing-links.json");
+        const auto& json = selectedProfile().json;
         const auto script = "const adapter = " + json + ";\n" + resource("/org/streamgallery/app/scripts/extract-listing.js");
         struct Evaluation { ListingPtr state; unsigned generation; };
         auto* request = new Evaluation{shared(), generation};
@@ -253,9 +276,7 @@ GtkWidget* createListingView(WebKitWebContext* context, std::function<void(const
     state->openVideo = std::move(openVideo); state->librarySaved = std::move(librarySaved);
     g_object_set_data_full(G_OBJECT(state->root), "listing-state", new ListingPtr(state), +[](gpointer data) { delete static_cast<ListingPtr*>(data); });
     auto* toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state->profile), "Next-page links");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state->profile), "Load-more button");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(state->profile), 0);
+    state->reloadProfiles();
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->address), "Listing page URL"); gtk_entry_set_max_length(GTK_ENTRY(state->address), 8192);
     auto* load = gtk_button_new_with_label("Load listing");
     gtk_box_pack_start(GTK_BOX(toolbar), state->address, TRUE, TRUE, 0);
@@ -263,7 +284,13 @@ GtkWidget* createListingView(WebKitWebContext* context, std::function<void(const
     gtk_box_pack_start(GTK_BOX(toolbar), state->stop, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(state->root), toolbar, FALSE, FALSE, 0);
     auto* actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    for (auto* widget : {state->profile, state->extract, state->next}) gtk_box_pack_start(GTK_BOX(actions), widget, FALSE, FALSE, 0);
+    auto* reload = gtk_button_new_with_label("Reload profiles");
+    gtk_widget_set_name(reload, "listing-reload-profiles");
+    g_signal_connect(reload, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+        auto* state = static_cast<Listing*>(data); state->reloadProfiles();
+        state->message("Profiles reloaded — load a listing or choose Find videos");
+    }), state.get());
+    for (auto* widget : {state->profile, reload, state->extract, state->next}) gtk_box_pack_start(GTK_BOX(actions), widget, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(state->root), actions, FALSE, FALSE, 0);
     auto* paned = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
     auto* scroll = gtk_scrolled_window_new(nullptr, nullptr);

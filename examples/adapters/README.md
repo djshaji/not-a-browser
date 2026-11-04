@@ -47,8 +47,7 @@ limit, and extension. It returns structured page, candidate, and poster data to
 the native application. Titles have normalized whitespace and a maximum of 1,024
 characters (or the lower configured limit), with the page URL as fallback.
 Discover can save the page URL, title, and poster to Library; transient manifest
-URLs remain playback-only. Rebuild after changing the profile; runtime adapter
-installation and arbitrary adapter IDs are not implemented.
+URLs remain playback-only. Rebuild after changing the profile; arbitrary adapter IDs are not implemented.
 
 Native workers fetch up to four candidates concurrently, validate HTTP/HTTPS
 redirects (at most five), reject credentials, limit each playlist to 1 MiB, and
@@ -78,8 +77,7 @@ Fixtures live in `tests/fixtures/listings/`; CTest's `listings` target exercises
 both through a local HTTP server and rendered WebKit DOM.
 
 Edit the profiles for a target site's actual markup and rebuild. These sample
-layouts are not domain detection rules or supported production websites. Runtime
-profile installation and infinite scrolling are not implemented. The Python HLS
+layouts are not domain detection rules or supported production websites. Infinite scrolling is not implemented. The Python HLS
 fixture runner does not interpret listing profiles.
 
 The listing extractor resolves links and `img` `src`/`data-src` against the document
@@ -97,3 +95,23 @@ Play uses the video's durable page URL in the existing HLS browser. Save reuses
 the same asynchronous bookmark service as page discovery, including duplicate
 reporting, metadata preservation, and gallery refresh. Work from a previous
 listing cannot change new cards after navigation; explicit saves still finish.
+
+## User profile files
+
+Place JSON profiles directly in `~/.config/notabrowser/` (or
+`$XDG_CONFIG_HOME/notabrowser/` when set), then choose **Reload profiles** in the relevant Discover tab.
+Copy `examples/adapters/listing-links.json` or `listing-load-more.json` to a
+new `.json` filename and edit its `name`, selectors, and pagination settings.
+Valid files appear after the built-in profiles in the listing profile chooser,
+sorted by filename. Each profile declares `pagination.type` as `link` or `button`.
+
+To customize video-page discovery, copy `examples/adapters/generic-hls.json` as
+`generic-hls.json` in the same directory and edit its discovery settings. Keep
+`interfaceVersion: 1` and `id: "generic-html-hls"`. This overrides the built-in
+HLS profile; it does not add a separate HLS chooser or automatic site matching.
+
+Files must be valid JSON with the required fields. Invalid, unsupported, or
+oversized files (over 128 KiB) are ignored with a terminal diagnostic; HLS falls
+back to the built-in profile. Up to 64 valid custom listing profiles are loaded.
+Native network, pagination, and extraction safety limits still apply. Editing
+user files requires **Reload profiles** in the relevant tab, but no restart or rebuild. Reloading stops current discovery and clears its results; choose **Find videos** or **Extract & Play** to extract again. The listing selection is preserved by filename when available, otherwise it falls back to Next-page links.

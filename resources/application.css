@@ -2,3 +2,29 @@
 .empty-state { padding: 48px; }
 .empty-title { font-size: 24px; font-weight: bold; }
 .empty-description { color: @theme_unfocused_fg_color; }
+
+#player-transport { padding: 12px 20px; }
+.transport-button {
+    border-radius: 50%;
+    padding: 0;
+    min-width: 0;
+    min-height: 0;
+    font-size: 12px;
+    font-weight: bold;
+    background-image: none;
+    background-color: alpha(@theme_fg_color, 0.06);
+    border: 1px solid alpha(@theme_fg_color, 0.16);
+    box-shadow: none;
+}
+.transport-button:hover { background-color: alpha(@theme_selected_bg_color, 0.18); }
+.transport-button:checked { background-color: @theme_selected_bg_color; color: @theme_selected_fg_color; }
+.transport-button:focus { border-color: @theme_selected_bg_color; }
+.transport-primary {
+    background-color: @theme_selected_bg_color;
+    color: @theme_selected_fg_color;
+    border-color: @theme_selected_bg_color;
+    font-size: 13px;
+    box-shadow: 0 4px 12px alpha(@theme_selected_bg_color, 0.25);
+}
+.transport-primary:hover { background-color: shade(@theme_selected_bg_color, 1.12); }
+.transport-primary:active { background-color: shade(@theme_selected_bg_color, 0.9); }
