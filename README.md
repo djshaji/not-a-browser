@@ -13,6 +13,7 @@ The current build provides:
 - A command-line bookmark tool, plus database, thumbnail, player, DOM extraction, and UI tests.
 - Native libmpv playback and WebKitGTK webpage loading with DOM-based HLS extraction.
 - Save discovered pages to Library with their title and poster, duplicate detection, and automatic gallery refresh.
+- Listing-card discovery with two sample JSON profiles, per-video Play/Save actions, and bounded next-link/load-more pagination.
 
 Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. CLI bookmarks record the supplied metadata; Discover can save a page's extracted title and poster. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
 
@@ -157,7 +158,7 @@ Schema version 2 adds thumbnail URLs and a title-sort index. Existing version-1 
 ctest --test-dir build --output-on-failure
 ```
 
-With the library, player, and discovery enabled, five C++ tests are registered:
+With the library, player, and discovery enabled, six C++ tests are registered:
 
 | Test | Coverage |
 | --- | --- |
@@ -165,6 +166,7 @@ With the library, player, and discovery enabled, five C++ tests are registered:
 | `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
 | `hls-discovery` | Master/media classification, reference resolution, local HTTP redirects, invalid/oversized responses, request headers, and cancellation without a display. |
 | `discovery` | Rendered DOM/title/poster extraction, verified playlists, cancellation, asynchronous saving/duplicates, metadata snapshots during navigation, save failure/retry, automatic gallery refresh, persisted library reopening, and local webpage-to-HLS playback when ffmpeg is installed. |
+| `listings` | Two local listing fixtures, relative links/posters, missing titles, invalid URLs, per-card Play/Save, deduplication, next-link loops, page limits, dynamic button pagination, delayed DOM insertion, Stop/navigation, and destruction during extraction. |
 | `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, and quit cleanup. |
 
 When Python 3 is available, CTest also registers `adapter-runner` for the local
@@ -192,10 +194,35 @@ Extraction retries every 500 ms within a 20-second extraction/verification windo
 
 The playlist inspector and native player receive the webpage referrer and browser user agent. Browser cookies stay in WebKit's website data store under the app's XDG data/cache directories; they are not copied to the inspector or libmpv. Streams that require browser cookies or are exposed only through network traffic, inaccessible frames, or protected players may not play through this DOM-only workflow. Unresolved HLS variables are unsupported. There is no network interception or yt-dlp fallback.
 
-Library bookmarks retain their durable webpage URLs. Temporary manifest URLs are used for playback and are not saved as bookmarks. Website-specific listing adapters, metadata import, and pagination remain planned.
+Library bookmarks retain their durable webpage URLs. Temporary manifest URLs are used for playback and are not saved as bookmarks.
+
+## Video listing discovery
+
+Open **Discover → Video listings**, select **Next-page links** or **Load-more
+button**, enter a listing URL, and choose **Load listing**. Matching cards appear
+above the browser preview with titles, posters, and **Play**/**Save** actions.
+Play opens the durable video page in the existing HLS discovery tab; Save records
+the card metadata in Library and refreshes the gallery. Save requires the library
+build option. No stream URLs are saved from the listing.
+
+The two embedded [sample profiles](examples/adapters/README.md#listing-profiles)
+target the local fixture layouts. They are examples, not automatic support for
+arbitrary websites: edit their selectors to match a target site and rebuild.
+Both views share the browser website session. Listing pages do not automatically
+trigger native playback.
+
+Choose **Next page** or **Load more** to collect another page/batch. Requests are
+user-triggered, deduplicated by normalized page URL, and capped at five pages or
+batches and 120 cards per run. Each batch returns at most 24 new cards. Next links
+must stay on the same origin; visited-page loops stop pagination. Load-more and
+initial dynamic results use a DOM observer with an eight-second readiness limit;
+page loading has a 30-second timeout. Choose **Find videos** to recheck the current
+DOM, or **Stop** to cancel pending work while retaining collected cards. Loading
+a new URL or changing profile clears the result set. Infinite scrolling and
+production website profiles remain future work.
 
 ## Roadmap and contribution
 
-The application includes the library/gallery, a libmpv player through `GtkGLArea`, and an initial WebKit DOM-based HLS discovery workflow. Future work includes site-specific listing adapters, metadata import, pagination automation, folder/tag editing, and release hardening. See [Plan.md](Plan.md) for the longer-term design; some planned features remain unimplemented.
+The application includes the library/gallery, a libmpv player through `GtkGLArea`, WebKit DOM-based HLS discovery, and sample listing profiles with bounded pagination. Future work includes production website profiles, richer metadata, infinite scrolling, folder/tag editing, and release hardening. See [Plan.md](Plan.md) for the longer-term design; some planned features remain unimplemented.
 
 See [Plan.md](Plan.md) for architecture and phase acceptance criteria, and [AGENTS.md](AGENTS.md) for contributor guidelines. Source modules live in `src/app/`, `src/ui/`, `src/database/`, `src/models/`, and `src/services/`; embedded assets are in `resources/`, and tests are in `tests/`.

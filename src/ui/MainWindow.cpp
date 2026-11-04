@@ -11,6 +11,7 @@
 
 #ifdef HAVE_DISCOVERY
 #include "ui/BrowserView.hpp"
+#include "ui/ListingView.hpp"
 #endif
 
 // Referencing the generated symbol also pulls resources from the static library.
@@ -129,8 +130,15 @@ GtkWidget* createMainWindow(GtkApplication* application) {
         gtk_stack_set_visible_child_name(pages, "player");
         // Selecting the page maps its GL area before loading the stream.
         openPlayerStream(playerView, stream.c_str(), page.c_str(), agent.c_str());
+    }, librarySaved);
+    auto* tabs = gtk_notebook_new();
+    gtk_notebook_append_page(GTK_NOTEBOOK(tabs), browser, gtk_label_new("Video page"));
+    auto* listing = createListingView(browserContext(browser), [browser, pages](const std::string& url) {
+        gtk_stack_set_visible_child_name(pages, "browser");
+        openBrowserPage(browser, url);
     }, std::move(librarySaved));
-    gtk_box_pack_start(browserPage, browser, TRUE, TRUE, 0);
+    gtk_notebook_append_page(GTK_NOTEBOOK(tabs), listing, gtk_label_new("Video listings"));
+    gtk_box_pack_start(browserPage, tabs, TRUE, TRUE, 0);
     g_object_set_data(G_OBJECT(window), "discovery-view", browser);
 #endif
     g_object_unref(builder);

@@ -1,0 +1,14 @@
+{
+  "interfaceVersion": 1,
+  "id": "listing-load-more",
+  "name": "Cards with a Load more button",
+  "description": "Second sample profile for dynamically appended cards; adapt selectors to the target website.",
+  "selectors": {
+    "card": "article.clip",
+    "link": "a.watch[href]",
+    "title": "h2",
+    "poster": "img"
+  },
+  "pagination": { "type": "button", "selector": "button.more-videos" },
+  "limits": { "maxItemsPerPage": 24, "waitMilliseconds": 8000 }
+}

@@ -1,8 +1,7 @@
 #include "ui/BrowserView.hpp"
 #include "services/ThumbnailService.hpp"
 #ifdef HAVE_LIBRARY
-#include "database/LibraryRepository.hpp"
-#include <filesystem>
+#include "services/BookmarkService.hpp"
 #endif
 #include <webkit2/webkit2.h>
 #include <memory>
@@ -119,48 +118,22 @@ struct Browser {
         if (!gtk_widget_get_sensitive(save)) return;
         // An explicit save finishes even if the user navigates away. Its metadata
         // is immutable, and only the matching page receives completion messages.
-        struct SaveRequest {
-            BrowserPtr state;
-            unsigned generation;
-            std::string path, page, title, poster;
-        };
-        auto path = std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db";
-        auto* request = new SaveRequest{shared(), generation, path.string(), result.pageUrl,
-            result.title.empty() ? result.pageUrl : result.title, result.posterUrl};
         saving = true;
         updateSaveButton();
         saveMessage("Saving to Library…");
-        GTask* task = g_task_new(nullptr, nullptr, +[](GObject*, GAsyncResult* async, gpointer) {
-            auto* task = G_TASK(async);
-            auto* request = static_cast<SaveRequest*>(g_task_get_task_data(task));
-            auto state = request->state;
-            GError* error = nullptr;
-            std::unique_ptr<BookmarkResult> saved(static_cast<BookmarkResult*>(g_task_propagate_pointer(task, &error)));
+        auto state = shared();
+        const auto token = generation;
+        saveBookmarkAsync(result.pageUrl, result.title, result.posterUrl, [state, token](bool created, const std::string& error) {
             if (!state->closed) {
                 state->saving = false;
                 state->updateSaveButton();
-                if (request->generation == state->generation) {
-                    state->saveMessage(error ? std::string("Could not save to Library: ") + error->message :
-                        saved->created ? "Saved to Library" : "Already in Library");
+                if (token == state->generation) {
+                    state->saveMessage(!error.empty() ? "Could not save to Library: " + error :
+                        created ? "Saved to Library" : "Already in Library");
                 }
-                if (saved && state->librarySaved) state->librarySaved();
-            }
-            g_clear_error(&error);
-        }, nullptr);
-        g_task_set_task_data(task, request, +[](gpointer data) { delete static_cast<SaveRequest*>(data); });
-        g_task_run_in_thread(task, +[](GTask* task, gpointer, gpointer data, GCancellable*) {
-            auto* request = static_cast<SaveRequest*>(data);
-            try {
-                std::filesystem::create_directories(std::filesystem::path(request->path).parent_path());
-                Database database(request->path);
-                LibraryRepository library(database);
-                auto result = std::make_unique<BookmarkResult>(library.bookmarkWithStatus(request->page, request->title, request->poster));
-                g_task_return_pointer(task, result.release(), +[](gpointer data) { delete static_cast<BookmarkResult*>(data); });
-            } catch (const std::exception& error) {
-                g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s", error.what());
+                if (error.empty() && state->librarySaved) state->librarySaved();
             }
         });
-        g_object_unref(task);
     }
 #endif
     void showSelection() {
@@ -478,8 +451,14 @@ GtkWidget* createBrowserView(StreamReady onStream, std::function<void()> onLibra
     return state->root;
 }
 void openBrowserPage(GtkWidget* browser, const std::string& url) {
+    if (auto* notebook = gtk_widget_get_ancestor(browser, GTK_TYPE_NOTEBOOK))
+        gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), gtk_notebook_page_num(GTK_NOTEBOOK(notebook), browser));
     auto* state = static_cast<BrowserPtr*>(g_object_get_data(G_OBJECT(browser), "browser-state"));
     if (state && !(*state)->closed) (*state)->open(url);
+}
+WebKitWebContext* browserContext(GtkWidget* browser) {
+    auto* state = static_cast<BrowserPtr*>(g_object_get_data(G_OBJECT(browser), "browser-state"));
+    return state && !(*state)->closed ? webkit_web_view_get_context((*state)->web) : nullptr;
 }
 DiscoveryResult browserDiscoveryResult(GtkWidget* browser) {
     auto* state = static_cast<BrowserPtr*>(g_object_get_data(G_OBJECT(browser), "browser-state"));

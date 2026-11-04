@@ -66,3 +66,34 @@ and malformed variant references; it is not a full HLS validator. Browser cookie
 are not copied to the inspector or player; both receive the page referrer and
 user agent. The poster preview uses the existing bounded thumbnail service and
 retains a generic icon if the image cannot be loaded.
+
+## Listing profiles
+
+Desktop discovery also embeds `listing-links.json` and `listing-load-more.json`.
+They use a separate version-1 listing interface with `selectors.card`, `link`,
+`title`, and `poster`, plus a pagination `type` (`link` or `button`) and `selector`.
+The first fixture uses `.video-card`/`a.video-link`/`.video-title` and a next link;
+the second uses `article.clip`/`a.watch`/`h2` and a JavaScript load-more button.
+Fixtures live in `tests/fixtures/listings/`; CTest's `listings` target exercises
+both through a local HTTP server and rendered WebKit DOM.
+
+Edit the profiles for a target site's actual markup and rebuild. These sample
+layouts are not domain detection rules or supported production websites. Runtime
+profile installation and infinite scrolling are not implemented. The Python HLS
+fixture runner does not interpret listing profiles.
+
+The listing extractor resolves links and `img` `src`/`data-src` against the document
+base, rejects non-HTTP URLs/credentials/direct `.m3u8` manifests, normalizes titles
+with a URL fallback, and returns structured card metadata. A `MutationObserver`
+waits for initial cards or new cards after a single button click; cancellation,
+completion, and the bounded readiness timer disconnect it. Pagination is always
+initiated by the user. Next links are restricted to the current origin; loops are
+detected in native code. Native caps are five pages/batches, 120 total cards, and
+24 new cards per batch. Each extraction receives the native session's delivered URLs, so repeated
+cards and earlier batches do not hide later results. Card scans inspect at most
+20,000 elements and collect at most 120 distinct candidates per document.
+
+Play uses the video's durable page URL in the existing HLS browser. Save reuses
+the same asynchronous bookmark service as page discovery, including duplicate
+reporting, metadata preservation, and gallery refresh. Work from a previous
+listing cannot change new cards after navigation; explicit saves still finish.

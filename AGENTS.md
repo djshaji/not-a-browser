@@ -5,11 +5,11 @@
 Stream Gallery is a native C++17/GTK3 Linux application with a SQLite gallery, libmpv playback, and WebKitGTK DOM-based HLS discovery. `README.md` documents current behavior; `Plan.md` describes the broader roadmap, including features not yet implemented.
 
 - `src/app/`: startup and application lifecycle.
-- `src/ui/`: main window, grid/list gallery, libmpv player, and WebKit browser.
+- `src/ui/`: main window, grid/list gallery, libmpv player, and WebKit page/listing browsers.
 - `src/database/`: migrations, repositories, and bookmark CLI.
 - `src/models/`: shared data types.
 - `src/services/`: thumbnail loading/caching and bounded HLS fetching/inspection.
-- `resources/`: embedded GTK Builder XML, CSS, and `scripts/extract-hls.js`.
+- `resources/`: embedded GTK Builder XML, CSS, and HLS/listing extraction scripts.
 - `tests/`: standalone C++ test executables registered with CTest.
 
 ## Build, Test, and Development Commands
@@ -37,9 +37,11 @@ Preserve player lifecycle handling, GtkGLArea/OpenGL ownership, and asynchronous
 
 Explicit library saves run in database workers using a snapshot of page metadata. Finish an initiated save across navigation, refresh the gallery on success, and suppress messages for stale pages or destroyed widgets. Use atomic new/duplicate reporting and preserve existing bookmark metadata.
 
+Keep listing profiles independent. Listing extraction uses `MutationObserver` readiness, bounded user-triggered pagination, same-origin next links, and URL deduplication. Cancel observers on navigation/Stop/destruction, preserve session guards for thumbnail/save callbacks, and route Play through durable video-page discovery.
+
 ## Testing Guidelines
 
-Tests use GLib assertions or exception-based checks; no external framework or coverage threshold is configured. Name files `*_tests.cpp`. CTest registers `database`, `thumbnails`, `hls-discovery`, `discovery`, and `ui-smoke` according to enabled features, plus `adapter-runner` when Python 3 is available. Cover persistence, migrations, deduplication, FTS, pagination, caching, HLS verification, DOM extraction/cancellation, playback lifecycle, shortcuts, and asynchronous UI behavior. Isolate test data with temporary XDG directories and prefer local fixtures/HTTP servers over live websites.
+Tests use GLib assertions or exception-based checks; no external framework or coverage threshold is configured. Name files `*_tests.cpp`. CTest registers `database`, `thumbnails`, `hls-discovery`, `discovery`, `listings`, and `ui-smoke` according to enabled features, plus `adapter-runner` when Python 3 is available. Cover persistence, migrations, deduplication, FTS, pagination, caching, HLS verification, DOM extraction/cancellation, playback lifecycle, shortcuts, and asynchronous UI behavior. Isolate test data with temporary XDG directories and prefer local fixtures/HTTP servers over live websites.
 
 UI/discovery tests use Adwaita with fatal warnings and automatically use `xvfb-run` when installed. Missing displays or restricted image codecs can cause skips; report them separately from passing tests. Discovery's local HLS playback subcheck requires `ffmpeg`. Manually verify visible UI changes; playback needs a working OpenGL session. Check muted startup, seeking, fullscreen restoration, EOF/replay, shortcuts, and discovery cancellation when relevant.
 
@@ -49,4 +51,4 @@ Use concise, imperative commit subjects, following recent history. PRs should de
 
 ## Configuration & Future Work
 
-Library/browser data and caches follow XDG data/cache directories under `stream-gallery/`; playback resume files use `$XDG_STATE_HOME/stream-gallery/watch-later/`. Never commit personal databases, credentials, or cookies. Validate URLs and pass subprocess arguments without shell interpolation. Browser cookies remain in WebKit's store and are not copied to libmpv; playback receives the page referrer and user agent. Keep durable bookmark page URLs separate from temporary playback URLs. Website listing adapters, metadata import, and pagination automation remain planned; keep future adapters independent.
+Library/browser data and caches follow XDG data/cache directories under `stream-gallery/`; playback resume files use `$XDG_STATE_HOME/stream-gallery/watch-later/`. Never commit personal databases, credentials, or cookies. Validate URLs and pass subprocess arguments without shell interpolation. Browser cookies remain in WebKit's store and are not copied to libmpv; playback receives the page referrer and user agent. Keep durable bookmark page URLs separate from temporary playback URLs. Production website profiles, richer metadata, and infinite scrolling remain planned.

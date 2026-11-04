@@ -3,6 +3,9 @@
     <file>ui/main-window.ui</file>
     <file>application.css</file>
     <file>scripts/extract-hls.js</file>
+    <file>scripts/extract-listing.js</file>
     <file alias="adapters/generic-hls.json">../examples/adapters/generic-hls.json</file>
+    <file alias="adapters/listing-links.json">../examples/adapters/listing-links.json</file>
+    <file alias="adapters/listing-load-more.json">../examples/adapters/listing-load-more.json</file>
   </gresource>
 </gresources>

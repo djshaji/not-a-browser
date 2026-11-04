@@ -1,0 +1,21 @@
+<!doctype html><title>Dynamic catalog</title>
+<section id="cards">
+<article class="clip"><a class="watch" href="/watch/one"><h2>Dynamic first</h2><img src="/poster.svg"></a></article>
+<article class="clip"><a class="watch" href="/watch/two"><h2>Dynamic second</h2></a></article>
+</section>
+<button class="more-videos">Load more</button>
+<script>
+let batch = 0;
+document.querySelector('button').addEventListener('click', function () {
+    const button = this;
+    button.disabled = true;
+    setTimeout(() => {
+        ++batch;
+        document.querySelector('#cards').insertAdjacentHTML('beforeend', batch === 1
+            ? '<article class="clip"><a class="watch" href="/watch/one"><h2>Duplicate</h2></a></article><article class="clip"><a class="watch" href="/watch/three"><h2>Dynamic third</h2></a></article>'
+            : '<article class="clip"><a class="watch" href="/watch/four"><h2>Dynamic fourth</h2></a></article>');
+        if (batch === 2) button.remove();
+        else button.disabled = false;
+    }, 150);
+});
+</script>

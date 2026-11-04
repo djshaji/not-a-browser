@@ -1,5 +1,6 @@
 #pragma once
 #include <gtk/gtk.h>
+#include <webkit2/webkit2.h>
 #include <functional>
 #include <string>
 #include "services/HlsDiscovery.hpp"
@@ -16,4 +17,6 @@ using StreamReady = std::function<void(const std::string& stream, const std::str
 GtkWidget* createBrowserView(StreamReady onStream, std::function<void()> onLibrarySaved = {});
 void openBrowserPage(GtkWidget* browser, const std::string& url);
 DiscoveryResult browserDiscoveryResult(GtkWidget* browser);
+// Borrowed context; listing views share this browser's website session.
+WebKitWebContext* browserContext(GtkWidget* browser);
 }

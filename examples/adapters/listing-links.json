@@ -1,0 +1,14 @@
+{
+  "interfaceVersion": 1,
+  "id": "listing-links",
+  "name": "Cards with next-page links",
+  "description": "Sample listing profile; adapt the selectors to the target website.",
+  "selectors": {
+    "card": ".video-card",
+    "link": "a.video-link[href]",
+    "title": ".video-title",
+    "poster": "img"
+  },
+  "pagination": { "type": "link", "selector": "a[rel='next'][href]" },
+  "limits": { "maxItemsPerPage": 24, "waitMilliseconds": 8000 }
+}
