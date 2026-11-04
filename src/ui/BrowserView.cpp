@@ -1,7 +1,10 @@
 #include "ui/BrowserView.hpp"
+#include "services/ThumbnailService.hpp"
 #include <webkit2/webkit2.h>
 #include <memory>
 #include <utility>
+#include <deque>
+#include <set>
 
 extern "C" GResource* stream_gallery_get_resource();
 
@@ -20,12 +23,22 @@ bool httpUrl(const std::string& value) {
 struct Browser;
 using BrowserPtr = std::shared_ptr<Browser>;
 struct Evaluation { BrowserPtr state; unsigned generation; };
+std::string stringProperty(JSCValue* object, const char* name) {
+    if (!object || !jsc_value_is_object(object)) return {};
+    JSCValue* value = jsc_value_object_get_property(object, name);
+    gchar* text = value && jsc_value_is_string(value) ? jsc_value_to_string(value) : nullptr;
+    std::string result = text ? text : "";
+    g_free(text); g_clear_object(&value);
+    return result;
+}
 struct Browser {
     GtkWidget* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     GtkWidget* address = gtk_entry_new();
     GtkWidget* status = gtk_label_new("Load a webpage to find an HLS stream in its DOM");
     GtkWidget* streams = gtk_combo_box_text_new();
     GtkWidget* play = gtk_button_new_with_label("Play stream");
+    GtkWidget* poster = gtk_image_new_from_icon_name("video-x-generic", GTK_ICON_SIZE_DIALOG);
+    GtkWidget* details = gtk_label_new("");
     WebKitWebView* web = nullptr;
     Browser() {
         gchar* data = g_build_filename(g_get_user_data_dir(), "stream-gallery", "browser", nullptr);
@@ -46,6 +59,10 @@ struct Browser {
     bool autoPlay = true;
     bool failed = false;
     std::string script;
+    DiscoveryResult result;
+    std::set<std::string> requested;
+    std::deque<std::string> pending;
+    unsigned inFlight = 0;
     BrowserPtr shared() { return *static_cast<BrowserPtr*>(g_object_get_data(G_OBJECT(root), "browser-state")); }
     ~Browser() { g_clear_object(&cancellation); }
     void message(const char* text) {
@@ -58,10 +75,97 @@ struct Browser {
         if (cancellation) g_cancellable_cancel(cancellation);
         g_clear_object(&cancellation);
         evaluating = false;
+        pending.clear(); requested.clear(); inFlight = 0;
     }
     void clearStreams() {
         gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(streams));
         gtk_widget_set_sensitive(play, FALSE);
+        result = {};
+        gtk_image_set_from_icon_name(GTK_IMAGE(poster), "video-x-generic", GTK_ICON_SIZE_DIALOG);
+        gtk_widget_set_tooltip_text(poster, nullptr);
+        gtk_label_set_text(GTK_LABEL(details), "");
+    }
+    void showSelection() {
+        const char* selected = gtk_combo_box_get_active_id(GTK_COMBO_BOX(streams));
+        if (!selected) return;
+        for (const auto& playlist : result.playlists) {
+            if (playlist.url != selected) continue;
+            const auto links = playlist.referenceSummary == "relative-only" ? "relative" :
+                playlist.referenceSummary == "absolute-only" ? "absolute" : "mixed";
+            std::string text = playlist.master ? std::string("Master playlist: ") + links + " links" : "Media playlist";
+            if (playlist.master) text += " (" + std::to_string(playlist.references.size()) +
+                (playlist.references.size() == 1 ? " reference)" : " references)");
+            for (const auto& warning : playlist.warnings) text += "; " + warning;
+            gtk_label_set_text(GTK_LABEL(details), text.c_str());
+            gtk_widget_set_tooltip_text(details, text.c_str());
+            break;
+        }
+    }
+    void finishInspection() {
+        if (result.playlists.empty()) return;
+        if (timer) { g_source_remove(timer); timer = 0; }
+        if (!gtk_combo_box_get_active_id(GTK_COMBO_BOX(streams))) {
+            const HlsPlaylist* selected = &result.playlists.front();
+            for (const auto& playlist : result.playlists) if (playlist.master) { selected = &playlist; break; }
+            gtk_combo_box_set_active_id(GTK_COMBO_BOX(streams), selected->url.c_str());
+        }
+        gtk_widget_set_sensitive(play, TRUE);
+        std::string text = "Verified " + std::to_string(result.playlists.size()) + " HLS playlist(s)";
+        if (!result.errors.empty()) text += "; " + std::to_string(result.errors.size()) + " candidate(s) rejected";
+        message(text.c_str());
+        if (autoPlay) { autoPlay = false; playSelected(); }
+    }
+    void pump() {
+        while (inFlight < 4 && !pending.empty()) {
+            std::string url = std::move(pending.front()); pending.pop_front();
+            ++inFlight;
+            auto state = shared();
+            const auto token = generation;
+            const char* agent = webkit_settings_get_user_agent(webkit_web_view_get_settings(web));
+            inspectHlsPlaylistAsync(url, result.pageUrl, agent ? agent : "StreamGallery/0.1", cancellation,
+                [state, token, url](HlsPlaylist playlist) {
+                    if (state->closed || token != state->generation) return;
+                    --state->inFlight;
+                    if (!playlist.error.empty()) {
+                        state->result.errors.push_back(url + ": " + playlist.error);
+                    } else {
+                        bool duplicate = false;
+                        for (const auto& existing : state->result.playlists)
+                            if (existing.url == playlist.url) duplicate = true;
+                        if (!duplicate) {
+                            std::string label = (playlist.master ? "Master — " : "Media — ") + playlist.url;
+                            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->streams), playlist.url.c_str(), label.c_str());
+                            state->result.playlists.push_back(std::move(playlist));
+                        }
+                    }
+                    state->pump();
+                    if (!state->inFlight && state->pending.empty()) state->finishInspection();
+                });
+        }
+    }
+    void loadPoster(const std::string& url) {
+        if (url.empty() || result.posterUrl == url) return;
+        result.posterUrl = url;
+        gtk_widget_set_tooltip_text(poster, url.c_str());
+        struct PosterRequest { BrowserPtr state; unsigned generation; std::string url; };
+        auto* request = new PosterRequest{shared(), generation, url};
+        GTask* task = g_task_new(nullptr, cancellation, +[](GObject*, GAsyncResult* async, gpointer) {
+            auto* task = G_TASK(async);
+            auto* request = static_cast<PosterRequest*>(g_task_get_task_data(task));
+            GError* error = nullptr;
+            auto* image = static_cast<GdkPixbuf*>(g_task_propagate_pointer(task, &error));
+            auto state = request->state;
+            if (image && !state->closed && request->generation == state->generation && request->url == state->result.posterUrl)
+                gtk_image_set_from_pixbuf(GTK_IMAGE(state->poster), image);
+            g_clear_object(&image); g_clear_error(&error);
+        }, nullptr);
+        g_task_set_task_data(task, request, +[](gpointer data) { delete static_cast<PosterRequest*>(data); });
+        g_task_run_in_thread(task, +[](GTask* task, gpointer, gpointer data, GCancellable* cancellation) {
+            auto* request = static_cast<PosterRequest*>(data);
+            auto* image = loadThumbnail(request->url, cancellation);
+            g_task_return_pointer(task, image, +[](gpointer data) { if (data) g_object_unref(data); });
+        });
+        g_object_unref(task);
     }
     void playSelected() {
         const char* stream = gtk_combo_box_get_active_id(GTK_COMBO_BOX(streams));
@@ -91,31 +195,32 @@ struct Browser {
                 }
                 state->evaluating = false;
                 if (error) {
+                    state->cancel();
                     state->message(error->message);
-                    if (state->timer) { g_source_remove(state->timer); state->timer = 0; }
                     g_error_free(error); g_clear_object(&value); return;
                 }
-                gchar* text = value ? jsc_value_to_string(value) : nullptr;
-                if (text && *text) {
-                    state->clearStreams();
-                    gchar** candidates = g_strsplit(text, "\n", 65);
-                    int count = 0;
-                    for (gchar** item = candidates; *item && count < 64; ++item) {
-                        if (httpUrl(*item)) {
-                            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->streams), *item, *item);
-                            ++count;
+                state->result.pageUrl = stringProperty(value, "pageUrl");
+                if (value && jsc_value_is_object(value)) {
+                    JSCValue* poster = jsc_value_object_get_property(value, "poster");
+                    const auto posterUrl = stringProperty(poster, "url");
+                    if (httpUrl(posterUrl)) state->loadPoster(posterUrl);
+                    g_clear_object(&poster);
+                    JSCValue* candidates = jsc_value_object_get_property(value, "playlistCandidates");
+                    if (candidates && jsc_value_is_array(candidates)) {
+                        JSCValue* length = jsc_value_object_get_property(candidates, "length");
+                        const int count = length ? jsc_value_to_int32(length) : 0;
+                        g_clear_object(&length);
+                        for (int i = 0; i < count && i < 64 && state->requested.size() < 64; ++i) {
+                            JSCValue* item = jsc_value_object_get_property_at_index(candidates, i);
+                            gchar* text = item && jsc_value_is_string(item) ? jsc_value_to_string(item) : nullptr;
+                            if (text && httpUrl(text) && state->requested.insert(text).second) state->pending.push_back(text);
+                            g_free(text); g_clear_object(&item);
                         }
                     }
-                    g_strfreev(candidates);
-                    if (count) {
-                        gtk_combo_box_set_active(GTK_COMBO_BOX(state->streams), 0);
-                        gtk_widget_set_sensitive(state->play, TRUE);
-                        state->message(("Found " + std::to_string(count) + " HLS stream(s)").c_str());
-                        if (state->timer) { g_source_remove(state->timer); state->timer = 0; }
-                        if (state->autoPlay) { state->autoPlay = false; state->playSelected(); }
-                    }
+                    g_clear_object(&candidates);
+                    state->pump();
                 }
-                g_free(text); g_clear_object(&value);
+                g_clear_object(&value);
             }, request);
     }
     void startExtraction() {
@@ -128,10 +233,17 @@ struct Browser {
             auto* state = static_cast<Browser*>(data);
             if (g_get_monotonic_time() >= state->deadline) {
                 state->timer = 0;
+                state->finishInspection();
                 if (state->cancellation) g_cancellable_cancel(state->cancellation);
                 ++state->generation;
                 state->evaluating = false;
-                state->message("No .m3u8 URL found in the DOM. Start the website player, then try Extract & Play.");
+                state->pending.clear(); state->inFlight = 0;
+                if (state->result.playlists.empty()) {
+                    std::string message = state->result.errors.empty() ?
+                        "No .m3u8 URL found in the DOM. Start the website player, then try Extract & Play." :
+                        "No verified HLS playlist. " + state->result.errors.back();
+                    state->message(message.c_str());
+                }
                 return G_SOURCE_REMOVE;
             }
             state->extract();
@@ -159,6 +271,13 @@ GtkWidget* createBrowserView(StreamReady onStream) {
         const char* text = static_cast<const char*>(g_bytes_get_data(script, &size));
         state->script.assign(text, size); g_bytes_unref(script);
     }
+    GBytes* adapter = g_resources_lookup_data("/org/streamgallery/app/adapters/generic-hls.json", G_RESOURCE_LOOKUP_FLAGS_NONE, nullptr);
+    if (adapter) {
+        gsize size = 0;
+        const char* text = static_cast<const char*>(g_bytes_get_data(adapter, &size));
+        state->script += "(" + std::string(text, size) + ");";
+        g_bytes_unref(adapter);
+    } else state->script.clear();
     auto* toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     auto* load = gtk_button_new_with_label("Load & Play");
     auto* stop = gtk_button_new_with_label("Stop loading");
@@ -170,6 +289,9 @@ GtkWidget* createBrowserView(StreamReady onStream) {
     gtk_box_pack_start(GTK_BOX(state->root), toolbar, FALSE, FALSE, 0);
     auto* results = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_hexpand(state->streams, TRUE);
+    gtk_widget_set_valign(state->streams, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(state->play, GTK_ALIGN_CENTER);
+    gtk_widget_set_size_request(state->poster, 192, 108);
     gtk_combo_box_set_popup_fixed_width(GTK_COMBO_BOX(state->streams), FALSE);
     GList* cells = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(state->streams));
     for (auto* cell = cells; cell; cell = cell->next)
@@ -178,11 +300,17 @@ GtkWidget* createBrowserView(StreamReady onStream) {
     g_list_free(cells);
     gtk_box_pack_start(GTK_BOX(results), state->streams, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(results), state->play, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(results), state->poster, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(state->root), results, FALSE, FALSE, 0);
+    gtk_label_set_ellipsize(GTK_LABEL(state->details), PANGO_ELLIPSIZE_END);
+    gtk_box_pack_start(GTK_BOX(state->root), state->details, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(state->root), GTK_WIDGET(state->web), TRUE, TRUE, 0);
     gtk_label_set_ellipsize(GTK_LABEL(state->status), PANGO_ELLIPSIZE_MIDDLE);
     gtk_box_pack_start(GTK_BOX(state->root), state->status, FALSE, FALSE, 0);
     gtk_widget_set_sensitive(state->play, FALSE);
+    g_signal_connect(state->streams, "changed", G_CALLBACK(+[](GtkComboBox*, gpointer data) {
+        static_cast<Browser*>(data)->showSelection();
+    }), state.get());
     // Keep browser media silent; the native player owns audio playback.
     webkit_web_view_set_is_muted(state->web, TRUE);
     g_signal_connect(load, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
@@ -239,10 +367,16 @@ GtkWidget* createBrowserView(StreamReady onStream) {
     gtk_widget_set_name(load, "discovery-load");
     gtk_widget_set_name(extract, "discovery-extract");
     gtk_widget_set_name(state->status, "discovery-status");
+    gtk_widget_set_name(state->poster, "discovery-poster");
+    gtk_widget_set_name(state->details, "discovery-details");
     return state->root;
 }
 void openBrowserPage(GtkWidget* browser, const std::string& url) {
     auto* state = static_cast<BrowserPtr*>(g_object_get_data(G_OBJECT(browser), "browser-state"));
     if (state && !(*state)->closed) (*state)->open(url);
+}
+DiscoveryResult browserDiscoveryResult(GtkWidget* browser) {
+    auto* state = static_cast<BrowserPtr*>(g_object_get_data(G_OBJECT(browser), "browser-state"));
+    return state && !(*state)->closed ? (*state)->result : DiscoveryResult{};
 }
 }

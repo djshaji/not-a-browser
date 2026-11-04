@@ -37,10 +37,45 @@ int main(int argc, char** argv) {
     if (!gtk_init_check(&argc, &argv)) {
         std::filesystem::remove_all(directory); g_free(directory); return 77;
     }
+    struct DomFixture { bool slowRequested = false; } domFixture;
+    SoupServer* domServer = soup_server_new(nullptr, nullptr);
+    soup_server_add_handler(domServer, nullptr, +[](SoupServer*, SoupServerMessage* message,
+        const char* path, GHashTable*, gpointer data) {
+        std::string body;
+        const char* type = "application/vnd.apple.mpegurl";
+        if (g_str_equal(path, "/hls/master.m3u8")) {
+            soup_server_message_set_redirect(message, SOUP_STATUS_FOUND, "/cdn/master.m3u8?token=one"); return;
+        } else if (g_str_equal(path, "/cdn/master.m3u8")) {
+            body = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\n720p/index.m3u8\n";
+        } else if (g_str_equal(path, "/invalid.m3u8")) {
+            body = "<html>Not a playlist</html>";
+        } else if (g_str_equal(path, "/poster.svg")) {
+            type = "image/svg+xml";
+            body = "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='36'><rect width='64' height='36' fill='red'/></svg>";
+        } else {
+            body = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nclip.ts\n#EXT-X-ENDLIST\n";
+        }
+        soup_server_message_set_status(message, SOUP_STATUS_OK, nullptr);
+        soup_server_message_set_response(message, type, SOUP_MEMORY_COPY, body.data(), body.size());
+        if (g_str_equal(path, "/slow.m3u8")) {
+            static_cast<DomFixture*>(data)->slowRequested = true;
+            soup_server_message_pause(message);
+            g_timeout_add_full(G_PRIORITY_DEFAULT, 300, +[](gpointer data) -> gboolean {
+                soup_server_message_unpause(SOUP_SERVER_MESSAGE(data)); return G_SOURCE_REMOVE;
+            }, g_object_ref(message), g_object_unref);
+        }
+    }, &domFixture, nullptr);
+    GError* serverError = nullptr;
+    g_assert_true(soup_server_listen_local(domServer, 0, SOUP_SERVER_LISTEN_IPV4_ONLY, &serverError));
+    g_assert_no_error(serverError);
+    GSList* domUris = soup_server_get_uris(domServer);
+    gchar* domUri = g_uri_to_string(static_cast<GUri*>(domUris->data));
+    const std::string domBase = domUri;
+    g_free(domUri); g_slist_free_full(domUris, reinterpret_cast<GDestroyNotify>(g_uri_unref));
     std::vector<std::string> played;
     auto* browser = streamgallery::createBrowserView([&](const std::string& stream, const std::string& page,
                                                        const std::string& agent) {
-        g_assert_true(page.find("https://fixture.test/") == 0);
+        g_assert_true(page.find(domBase) == 0);
         g_assert_false(agent.empty());
         played.push_back(stream);
     });
@@ -55,10 +90,12 @@ int main(int argc, char** argv) {
     g_assert_cmpstr(gtk_label_get_text(status), ==, "Enter an HTTP/HTTPS webpage URL without credentials");
     // Render JavaScript-generated DOM, resolve relative URLs, decode JSON escaping,
     // reject credentials/non-HTTP links, and deduplicate the same manifest.
-    webkit_web_view_load_html(web, R"HTML(
-        <html><head><base href="https://fixture.test/media/"></head><body>
+    std::string html = R"HTML(
+        <html><head><base href="BASEmedia/"></head><body>
         <a href="javascript:alert('x.m3u8')">invalid</a>
         <div data-src="https://user:secret@fixture.test/private.m3u8"></div>
+        <video poster="../poster.svg"></video>
+        <a href="../invalid.m3u8">Not HLS</a>
         <script>
         setTimeout(() => {
             const item = document.createElement('div');
@@ -66,14 +103,17 @@ int main(int argc, char** argv) {
             document.body.appendChild(item);
             const script = document.createElement('script');
             script.type = 'application/json';
-            script.textContent = '{"url":"https:\\/\\/cdn.fixture.test\\/alternate.m3u8?x=1\\u0026y=2"}';
+            script.textContent = '{"url":"BASEalternate.m3u8?x=1\\u0026y=2"}';
             document.body.appendChild(script);
             const duplicate = document.createElement('a');
             duplicate.href = item.dataset.src;
             document.body.appendChild(duplicate);
         }, 100);
         </script></body></html>
-    )HTML", "https://fixture.test/page");
+    )HTML";
+    for (std::size_t pos = 0; (pos = html.find("BASE", pos)) != std::string::npos; pos += domBase.size()) html.replace(pos, 4, domBase);
+    const auto page = domBase + "page";
+    webkit_web_view_load_html(web, html.c_str(), page.c_str());
     waitFor([&] { return played.size() == 1; });
     // Inline scripts can expose candidates before the delayed DOM insertion.
     g_assert_true(played[0].find(".m3u8") != std::string::npos);
@@ -82,25 +122,58 @@ int main(int argc, char** argv) {
     while (g_get_monotonic_time() < settle) { while (gtk_events_pending()) gtk_main_iteration(); g_usleep(1000); }
     gtk_button_clicked(extract);
     waitFor([&] { return played.size() == 2; });
-    g_assert_cmpstr(played.back().c_str(), ==, "https://fixture.test/hls/master.m3u8?token=one&quality=best");
-    g_assert_cmpstr(gtk_label_get_text(status), ==, "Found 2 HLS stream(s)");
+    const auto master = domBase + "cdn/master.m3u8?token=one";
+    g_assert_cmpstr(played.back().c_str(), ==, master.c_str());
+    auto structured = streamgallery::browserDiscoveryResult(browser);
+    g_assert_cmpuint(structured.playlists.size(), ==, 2);
+    g_assert_cmpuint(structured.errors.size(), ==, 1);
+    const auto poster = domBase + "poster.svg";
+    g_assert_cmpstr(structured.posterUrl.c_str(), ==, poster.c_str());
+    bool foundMaster = false;
+    for (const auto& playlist : structured.playlists) {
+        if (!playlist.master) continue;
+        foundMaster = true;
+        const auto child = domBase + "cdn/720p/index.m3u8";
+        g_assert_cmpstr(playlist.references[0].resolvedUrl.c_str(), ==, child.c_str());
+        g_assert_cmpstr(playlist.referenceSummary.c_str(), ==, "relative-only");
+    }
+    g_assert_true(foundMaster);
+    if (const char* screenshot = g_getenv("STREAM_GALLERY_TEST_SCREENSHOT")) {
+        auto* image = GTK_IMAGE(find(browser, GTK_TYPE_IMAGE, "discovery-poster"));
+        waitFor([&] { return gtk_image_get_storage_type(image) == GTK_IMAGE_PIXBUF; });
+        // Allow the image's queued redraw to reach the window before capture.
+        const auto redraw = g_get_monotonic_time() + 200 * G_TIME_SPAN_MILLISECOND;
+        while (g_get_monotonic_time() < redraw) { while (gtk_events_pending()) gtk_main_iteration(); g_usleep(1000); }
+        auto* pixels = gdk_pixbuf_get_from_window(gtk_widget_get_window(window), 0, 0,
+            gtk_widget_get_allocated_width(window), gtk_widget_get_allocated_height(window));
+        g_assert_nonnull(pixels);
+        GError* error = nullptr;
+        g_assert_true(gdk_pixbuf_save(pixels, screenshot, "png", &error, nullptr));
+        g_assert_no_error(error);
+        g_object_unref(pixels);
+    }
     auto* streamChoices = GTK_COMBO_BOX(find(browser, GTK_TYPE_COMBO_BOX));
-    gtk_combo_box_set_active(streamChoices, 1);
-    g_assert_cmpstr(gtk_combo_box_get_active_id(streamChoices), ==,
-        "https://cdn.fixture.test/alternate.m3u8?x=1&y=2");
+    const auto alternate = domBase + "alternate.m3u8?x=1&y=2";
+    g_assert_true(gtk_combo_box_set_active_id(streamChoices, alternate.c_str()));
+    // Navigate away while playlist verification is in flight.
+    const auto slowPage = domBase + "slow-page";
+    webkit_web_view_load_html(web, "<div data-src='/slow.m3u8'></div>", slowPage.c_str());
+    waitFor([&] { return domFixture.slowRequested; });
     // Navigation invalidates outstanding extraction and never replays stale URLs.
     webkit_web_view_load_html(web,
         "<html><script>setTimeout(() => { const item = document.createElement('div'); "
-        "item.dataset.file = '/new.' + 'm3u8'; document.body.appendChild(item); }, 100);</script></html>",
-        "https://fixture.test/new-page");
+        "item.dataset.src = '/new.' + 'm3u8'; document.body.appendChild(item); }, 100);</script></html>",
+        (domBase + "new-page").c_str());
     waitFor([&] { return played.size() == 3; });
-    g_assert_cmpstr(played.back().c_str(), ==, "https://fixture.test/new.m3u8");
+    const auto newStream = domBase + "new.m3u8";
+    g_assert_cmpstr(played.back().c_str(), ==, newStream.c_str());
     // Destroy while JavaScript evaluation is pending; callbacks must ignore it.
     gtk_button_clicked(extract);
     gtk_widget_destroy(window);
     const gint64 cleanup = g_get_monotonic_time() + G_TIME_SPAN_SECOND;
     while (g_get_monotonic_time() < cleanup) { while (gtk_events_pending()) gtk_main_iteration(); g_usleep(1000); }
     g_assert_cmpuint(played.size(), ==, 3);
+    soup_server_disconnect(domServer); g_object_unref(domServer);
     // Exercise the complete page -> DOM -> HLS -> native player path locally.
     gchar* ffmpeg = g_find_program_in_path("ffmpeg");
     if (ffmpeg) {

@@ -21,7 +21,7 @@ playlist file. Paths are relative to the mapping file. Optional `finalUrl`
 simulates a redirect target: child references resolve against that URL, without
 inheriting its query parameters. It does not simulate an actual redirect request.
 
-This first runner supports interface version 1 with id `generic-html-hls`.
+The Python runner supports interface version 1 with id `generic-html-hls`.
 The configurable parts are source selectors and attributes, poster source order,
 playlist extension, candidate count, and playlist byte limit. Selectors support
 tag names, attribute presence/equality, comma-separated alternatives, and the
@@ -41,6 +41,25 @@ the sample's listed URI attributes are inspected. Media segments are not
 traversed. Unknown tags and unresolved HLS variables produce warnings; this is
 not a full HLS validator. Posters are URL metadata and are not downloaded.
 
-The desktop WebKit discovery flow still uses its existing embedded script.
-Connecting the runner's structured output to that asynchronous flow and
-implementing bounded network fetching are subsequent integration work.
+Desktop discovery embeds this same JSON profile at build time. Its rendered DOM
+extractor uses the configured candidate/poster selectors, source order, candidate
+limit, and extension. It returns structured page, candidate, and poster data to
+the native application. Rebuild after changing the profile; runtime adapter
+installation and arbitrary adapter IDs are not implemented.
+
+Native workers fetch up to four candidates concurrently, validate HTTP/HTTPS
+redirects (at most five), reject credentials, limit each playlist to 1 MiB, and
+use a 10-second network timeout. These native bounds are currently fixed rather
+than configurable through JSON. The overall extraction/verification window is
+20 seconds. Navigation, Stop loading, and destruction cancel pending work and
+ignore stale callbacks. Local HTTP pages are supported; the sample's proposed
+`allowPrivateNetwork` policy is not implemented in desktop discovery.
+
+Only inspected master/media playlists enter the chooser. Masters are preferred
+when selecting the initial stream from the completed batch. Reference URLs are
+resolved against the final HTTP response URL and the original manifest is sent
+to libmpv without rewriting it. Native inspection rejects unresolved variables
+and malformed variant references; it is not a full HLS validator. Browser cookies
+are not copied to the inspector or player; both receive the page referrer and
+user agent. The poster preview uses the existing bounded thumbnail service and
+retains a generic icon if the image cannot be loaded.

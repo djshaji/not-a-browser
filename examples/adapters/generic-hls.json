@@ -2,8 +2,8 @@
   "interfaceVersion": 1,
   "id": "generic-html-hls",
   "name": "Generic HTML master HLS and poster discovery",
-  "status": "local-fixture-runner-supported-not-loaded-by-desktop-application",
-  "description": "Proposed declarative interface with a local Python fixture runner. See examples/adapters/README.md for supported operations. Network fetching and desktop integration remain future work.",
+  "status": "supported-by-local-fixture-runner-and-embedded-desktop-discovery",
+  "description": "Generic extraction profile embedded in desktop discovery, with a local Python fixture runner. See examples/adapters/README.md for supported operations and fixed native limits.",
   "input": {
     "htmlFile": "page.html",
     "pageUrl": "https://example.com/watch/123",

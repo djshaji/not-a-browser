@@ -144,13 +144,14 @@ Schema version 2 adds thumbnail URLs and a title-sort index. Existing version-1 
 ctest --test-dir build --output-on-failure
 ```
 
-With the library, player, and discovery enabled, four C++ tests are registered:
+With the library, player, and discovery enabled, five C++ tests are registered:
 
 | Test | Coverage |
 | --- | --- |
 | `database` | Persistence, migrations, deduplication, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
 | `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
-| `discovery` | Rendered JavaScript DOM, relative and escaped HLS URLs, deduplication, navigation cancellation, destruction during extraction, and local webpage-to-HLS playback when ffmpeg is installed. |
+| `hls-discovery` | Master/media classification, reference resolution, local HTTP redirects, invalid/oversized responses, request headers, and cancellation without a display. |
+| `discovery` | Rendered JavaScript DOM, structured results, poster extraction, verified playlists, deduplication, cancellation during verification, destruction during extraction, and local webpage-to-HLS playback when ffmpeg is installed. |
 | `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, and quit cleanup. |
 
 When Python 3 is available, CTest also registers `adapter-runner` for the local
@@ -169,11 +170,13 @@ For manual validation:
 
 ## Webpage HLS discovery
 
-In **Discover**, enter an HTTP/HTTPS webpage URL and choose **Load & Play** (or press Enter). The embedded WebKitGTK view loads the page and runs its JavaScript. The app scans media sources, DOM attributes, and inline scripts for `.m3u8` URLs, resolves relative links, and removes duplicates. It automatically sends the first result to libmpv and switches to Player. Choose another result and **Play stream** to use an alternative.
+In **Discover**, enter an HTTP/HTTPS webpage URL and choose **Load & Play** (or press Enter). The embedded WebKitGTK view loads the page and runs its JavaScript. The app uses the [generic adapter profile](examples/adapters/generic-hls.json) to scan configured media sources, attributes, and quoted inline-script strings for `.m3u8` URLs. It resolves relative links and removes duplicates. Native workers fetch the candidates, reject invalid playlists, and distinguish master playlists from media playlists using their contents. The chooser shows verified results; the initial selection prefers a master and automatically starts native playback. Choose another result and **Play stream** to use an alternative.
 
-Extraction retries every 500 ms for up to 20 seconds after loading. If the page needs interaction, use its player in Discover, then choose **Extract & Play**. **Stop loading** cancels both loading and extraction. New navigation cancels stale results; page loading has a 30-second timeout.
+Discover also shows a video poster, falling back to Open Graph/Twitter images when available. The selected master displays whether its inspected references are absolute, relative, or mixed. Relative references resolve against the final playlist URL after redirects. Original manifests are passed to libmpv without rewriting. Inspection is bounded to four concurrent requests, 1 MiB per playlist, five redirects, and a 10-second network timeout. See [adapter usage](examples/adapters/README.md) for the supported profile and local fixture runner.
 
-The native player receives the webpage referrer and browser user agent. Browser cookies stay in WebKit's website data store under the app's XDG data/cache directories; they are not copied to libmpv. Streams that require browser cookies or are exposed only through network traffic, inaccessible frames, or protected players may not play through this DOM-only workflow. There is no network interception or yt-dlp fallback.
+Extraction retries every 500 ms within a 20-second extraction/verification window after loading. Candidate URLs are attempted once per extraction run. If the page needs interaction or a request fails temporarily, use its player in Discover, then choose **Extract & Play** to retry. **Stop loading** cancels loading, extraction, and pending verification. New navigation cancels stale results; page loading has a 30-second timeout.
+
+The playlist inspector and native player receive the webpage referrer and browser user agent. Browser cookies stay in WebKit's website data store under the app's XDG data/cache directories; they are not copied to the inspector or libmpv. Streams that require browser cookies or are exposed only through network traffic, inaccessible frames, or protected players may not play through this DOM-only workflow. Unresolved HLS variables are unsupported. There is no network interception or yt-dlp fallback.
 
 Library bookmarks retain their durable webpage URLs. Temporary manifest URLs are used for playback and are not saved as bookmarks. Website-specific listing adapters, metadata import, and pagination remain planned.
 

@@ -8,7 +8,7 @@ Stream Gallery is a native C++17/GTK3 Linux application with a SQLite gallery, l
 - `src/ui/`: main window, grid/list gallery, libmpv player, and WebKit browser.
 - `src/database/`: migrations, repositories, and bookmark CLI.
 - `src/models/`: shared data types.
-- `src/services/`: thumbnail loading and caching.
+- `src/services/`: thumbnail loading/caching and bounded HLS fetching/inspection.
 - `resources/`: embedded GTK Builder XML, CSS, and `scripts/extract-hls.js`.
 - `tests/`: standalone C++ test executables registered with CTest.
 
@@ -33,11 +33,11 @@ Use four-space indentation, `PascalCase` class/file names, `.hpp` headers, and `
 
 Use RAII for ownership. Keep GTK access on the main thread and database/network/image work in background tasks. Cancel superseded jobs and ignore stale callbacks. Bound gallery queries and caches. Preserve existing data through transactional, versioned migrations.
 
-Preserve player lifecycle handling, GtkGLArea/OpenGL ownership, and asynchronous libmpv event delivery. Discovery extracts HLS URLs from the rendered DOM; it does not use yt-dlp or network interception. Cancel loading/extraction on navigation and destruction, and reject stale JavaScript results.
+Preserve player lifecycle handling, GtkGLArea/OpenGL ownership, and asynchronous libmpv event delivery. Discovery embeds `examples/adapters/generic-hls.json`, extracts structured DOM results, and verifies HLS in workers before playback. It does not use yt-dlp or network interception. Cancel loading/extraction/verification on navigation and destruction, and reject stale callbacks. Resolve playlist references against the final response URL after redirects.
 
 ## Testing Guidelines
 
-Tests use GLib assertions or exception-based checks; no external framework or coverage threshold is configured. Name files `*_tests.cpp`. CTest registers `database`, `thumbnails`, `discovery`, and `ui-smoke` according to enabled features. Cover persistence, migrations, deduplication, FTS, pagination, thumbnail caching, DOM extraction/cancellation, playback lifecycle, shortcuts, and asynchronous UI behavior. Isolate test data with temporary XDG directories and prefer local fixtures over live websites.
+Tests use GLib assertions or exception-based checks; no external framework or coverage threshold is configured. Name files `*_tests.cpp`. CTest registers `database`, `thumbnails`, `hls-discovery`, `discovery`, and `ui-smoke` according to enabled features, plus `adapter-runner` when Python 3 is available. Cover persistence, migrations, deduplication, FTS, pagination, caching, HLS verification, DOM extraction/cancellation, playback lifecycle, shortcuts, and asynchronous UI behavior. Isolate test data with temporary XDG directories and prefer local fixtures/HTTP servers over live websites.
 
 UI/discovery tests use Adwaita with fatal warnings and automatically use `xvfb-run` when installed. Missing displays or restricted image codecs can cause skips; report them separately from passing tests. Discovery's local HLS playback subcheck requires `ffmpeg`. Manually verify visible UI changes; playback needs a working OpenGL session. Check muted startup, seeking, fullscreen restoration, EOF/replay, shortcuts, and discovery cancellation when relevant.
 

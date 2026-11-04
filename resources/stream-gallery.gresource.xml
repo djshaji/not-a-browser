@@ -3,5 +3,6 @@
     <file>ui/main-window.ui</file>
     <file>application.css</file>
     <file>scripts/extract-hls.js</file>
+    <file alias="adapters/generic-hls.json">../examples/adapters/generic-hls.json</file>
   </gresource>
 </gresources>
