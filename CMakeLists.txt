@@ -16,7 +16,7 @@ add_custom_command(OUTPUT "${RESOURCE_SOURCE}"
         resources/scripts/extract-hls.js resources/scripts/extract-listing.js
         examples/adapters/generic-hls.json examples/adapters/listing-links.json examples/adapters/listing-load-more.json
     VERBATIM)
-add_library(stream-gallery-ui STATIC src/ui/MainWindow.cpp "${RESOURCE_SOURCE}")
+add_library(stream-gallery-ui STATIC src/ui/MainWindow.cpp src/ui/FilesView.cpp "${RESOURCE_SOURCE}")
 target_include_directories(stream-gallery-ui PUBLIC src)
 target_link_libraries(stream-gallery-ui PUBLIC PkgConfig::GTK3)
 target_compile_options(stream-gallery-ui PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>)

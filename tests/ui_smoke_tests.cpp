@@ -97,7 +97,19 @@ int main(int argc, char** argv) {
         g_assert_nonnull(stack);
         g_assert_true(gtk_stack_sidebar_get_stack(sidebar) == stack);
         g_assert_cmpstr(gtk_stack_get_visible_child_name(stack), ==, "gallery");
-        for (const char* page : {"browser", "player", "gallery"}) {
+        const char* shortcutPages[] = {"gallery", "browser", "player", "files"};
+        for (guint index = 0; index < 4; ++index) {
+            GdkEventKey navigationKey{};
+            navigationKey.type = GDK_KEY_PRESS;
+            navigationKey.keyval = GDK_KEY_1 + index;
+            navigationKey.state = GDK_MOD1_MASK;
+            gboolean handled = FALSE;
+            g_signal_emit_by_name(window, "key-press-event", &navigationKey, &handled);
+            g_assert_true(handled);
+            g_assert_cmpstr(gtk_stack_get_visible_child_name(stack), ==, shortcutPages[index]);
+        }
+
+        for (const char* page : {"browser", "player", "files", "gallery"}) {
             g_assert_nonnull(gtk_stack_get_child_by_name(stack, page));
             gtk_stack_set_visible_child_name(stack, page);
             g_assert_cmpstr(gtk_stack_get_visible_child_name(stack), ==, page);
@@ -147,11 +159,24 @@ int main(int argc, char** argv) {
         };
         auto* playPause = GTK_BUTTON(findNamed(window, "player-play-pause"));
         waitFor([&] { return g_strcmp0(gtk_button_get_label(playPause), "Pause") == 0; });
-        // Shortcuts still work on Library with a text entry focused.
+        // Text entry takes priority over single-key playback and quit shortcuts.
         gtk_stack_set_visible_child_name(stack, "gallery");
 #ifdef HAVE_LIBRARY_TESTS
         gtk_widget_grab_focus(findNamed(window, "library-search"));
 #endif
+        gtk_stack_set_visible_child_name(stack, "player");
+        gtk_widget_grab_focus(GTK_WIDGET(url));
+        for (guint key : {GDK_KEY_p, GDK_KEY_m, GDK_KEY_f, GDK_KEY_q, GDK_KEY_1,
+                         GDK_KEY_plus, GDK_KEY_Left}) {
+            sendKey(key, static_cast<GdkModifierType>(0));
+            g_assert_false(gtk_widget_in_destruction(window));
+            g_assert_cmpstr(gtk_label_get_text(playerStatus), ==, "Player ready");
+            g_assert_cmpstr(gtk_button_get_label(playPause), ==, "Pause");
+            g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(findNamed(window, "player-mute"))));
+        }
+        g_assert_true(sendKey(GDK_KEY_1, GDK_MOD1_MASK));
+        g_assert_cmpstr(gtk_stack_get_visible_child_name(stack), ==, "gallery");
+        gtk_window_set_focus(GTK_WINDOW(window), nullptr);
         g_assert_true(sendKey(GDK_KEY_P, GDK_SHIFT_MASK));
         waitFor([&] { return g_strcmp0(gtk_button_get_label(playPause), "Play") == 0; });
         g_assert_true(sendKey(GDK_KEY_p, static_cast<GdkModifierType>(0)));
@@ -283,6 +308,33 @@ int main(int argc, char** argv) {
             g_assert_true(gdk_pixbuf_save(pixels, screenshot, "png", nullptr, nullptr));
             g_object_unref(pixels);
         }
+        // Returning from playback must keep the file browser's location and selection.
+        gtk_stack_set_visible_child_name(stack, "files");
+        auto* chooser = GTK_FILE_CHOOSER(findNamed(window, "files-chooser"));
+        GSList* filters = gtk_file_chooser_list_filters(chooser);
+        gtk_file_chooser_set_filter(chooser, GTK_FILE_FILTER(g_slist_last(filters)->data));
+        g_slist_free(filters);
+        g_assert_true(gtk_file_chooser_set_filename(chooser, longFixture));
+        auto selectedFile = [&] {
+            gchar* selected = gtk_file_chooser_get_filename(chooser);
+            const bool matches = g_strcmp0(selected, longFixture) == 0;
+            g_free(selected);
+            return matches;
+        };
+        waitFor(selectedFile);
+        gtk_button_clicked(GTK_BUTTON(findNamed(window, "files-play")));
+        g_assert_cmpstr(gtk_stack_get_visible_child_name(stack), ==, "player");
+        gtk_stack_set_visible_child_name(stack, "files");
+        waitFor(selectedFile);
+        gchar* folder = gtk_file_chooser_get_current_folder(chooser);
+        g_assert_cmpstr(folder, ==, fixtureDirectory);
+        g_free(folder);
+        // Also preserve browsing state through a page switch without playback.
+        gtk_stack_set_visible_child_name(stack, "gallery");
+        gtk_stack_set_visible_child_name(stack, "files");
+        waitFor(selectedFile);
+        gtk_stack_set_visible_child_name(stack, "player");
+        gtk_window_set_focus(GTK_WINDOW(window), nullptr);
         g_remove(longFixture); g_free(longFixture);
         g_remove(fixture);
         g_rmdir(fixtureDirectory);
@@ -317,6 +369,7 @@ int main(int argc, char** argv) {
         }
         while (gtk_events_pending()) gtk_main_iteration();
         // Exercise immediate quit with both q and Shift+Q, preserving cleanup.
+        gtk_window_set_focus(GTK_WINDOW(window), nullptr);
 #ifdef HAVE_PLAYER_TESTS
         if (iteration == 1) g_assert_true(sendKey(GDK_KEY_f, static_cast<GdkModifierType>(0)));
 #endif

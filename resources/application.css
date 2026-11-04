@@ -28,3 +28,23 @@
 }
 .transport-primary:hover { background-color: shade(@theme_selected_bg_color, 1.12); }
 .transport-primary:active { background-color: shade(@theme_selected_bg_color, 0.9); }
+
+#player-secondary-controls { padding: 4px 16px 12px; }
+.player-secondary-button {
+    border-radius: 21px;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    background-image: none;
+    background-color: alpha(@theme_fg_color, 0.06);
+    border: 1px solid alpha(@theme_fg_color, 0.12);
+    box-shadow: none;
+}
+.player-secondary-button:hover { background-color: alpha(@theme_selected_bg_color, 0.18); }
+.player-secondary-button:checked { background-color: alpha(@theme_selected_bg_color, 0.2); color: @theme_selected_bg_color; }
+.player-secondary-button:focus { border-color: @theme_selected_bg_color; }
+#player-volume { padding: 12px 8px; }
+#player-volume trough { min-height: 4px; border-radius: 8px; background-color: alpha(@theme_fg_color, 0.12); border: none; }
+#player-volume highlight { border-radius: 8px; background-color: @theme_selected_bg_color; border: none; }
+#player-volume slider { min-width: 12px; min-height: 12px; margin: -4px; border-radius: 50%; background-image: none; background-color: @theme_selected_bg_color; border: 2px solid @theme_bg_color; box-shadow: none; }
+#player-volume slider:hover { background-color: shade(@theme_selected_bg_color, 1.12); }

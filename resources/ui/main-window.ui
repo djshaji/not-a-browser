@@ -35,7 +35,7 @@
       <child><object class="GtkImage"><property name="icon-name">media-playback-start-symbolic</property><property name="pixel-size">64</property></object></child>
       <child><object class="GtkLabel"><property name="label">Player — not implemented</property><style><class name="empty-title"/></style></object></child>
       <child><object class="GtkLabel"><property name="label">Video playback will be added in Phase 4.</property><property name="wrap">True</property><property name="max-width-chars">48</property><property name="justify">center</property><style><class name="empty-description"/></style></object></child>
-      </object><packing><property name="name">player</property><property name="title">Player</property></packing></child></object><packing><property name="resize">True</property><property name="shrink">False</property></packing></child>
+      </object><packing><property name="name">player</property><property name="title">Player</property></packing></child><child><object class="GtkBox" id="files_page"><property name="orientation">vertical</property></object><packing><property name="name">files</property><property name="title">Files</property></packing></child></object><packing><property name="resize">True</property><property name="shrink">False</property></packing></child>
     </object></child>
   </object>
 </interface>

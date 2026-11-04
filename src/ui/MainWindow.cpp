@@ -1,4 +1,5 @@
 #include "ui/MainWindow.hpp"
+#include "ui/FilesView.hpp"
 #include <utility>
 #ifdef HAVE_LIBRARY
 #include "ui/GalleryView.hpp"
@@ -19,6 +20,18 @@ extern "C" GResource* stream_gallery_get_resource();
 
 namespace streamgallery {
 namespace {
+bool focusAcceptsText(GtkWidget* window) {
+    auto* focus = gtk_window_get_focus(GTK_WINDOW(window));
+    for (auto* widget = focus; widget; widget = gtk_widget_get_parent(widget)) {
+        if (GTK_IS_EDITABLE(widget) || GTK_IS_TEXT_VIEW(widget)) return true;
+#ifdef HAVE_DISCOVERY
+        // WebKit handles its own editable DOM elements and keyboard navigation.
+        if (WEBKIT_IS_WEB_VIEW(widget)) return true;
+#endif
+    }
+    return false;
+}
+
 void themeChanged(GObject* toggle, GParamSpec*, gpointer) {
     g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme",
                  gtk_switch_get_active(GTK_SWITCH(toggle)), nullptr);
@@ -40,12 +53,29 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     g_signal_connect(window, "key-press-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventKey* event, gpointer) -> gboolean {
         constexpr guint reserved = GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_MOD3_MASK |
             GDK_MOD4_MASK | GDK_MOD5_MASK | GDK_SUPER_MASK | GDK_HYPER_MASK | GDK_META_MASK;
-        if ((event->state & reserved) || gdk_keyval_to_lower(event->keyval) != GDK_KEY_q) return FALSE;
+        if (focusAcceptsText(widget) || (event->state & reserved) ||
+            gdk_keyval_to_lower(event->keyval) != GDK_KEY_q) return FALSE;
         auto* app = gtk_window_get_application(GTK_WINDOW(widget));
         if (app) g_application_quit(G_APPLICATION(app));
         gtk_widget_destroy(widget);
         return TRUE;
     }), nullptr);
+    auto* navigationPages = GTK_STACK(gtk_builder_get_object(builder, "pages"));
+    auto navigatePage = +[](GtkWidget* widget, GdkEventKey* event, gpointer data) -> gboolean {
+        const guint modifiers = event->state & gtk_accelerator_get_default_mod_mask();
+        if (modifiers != GDK_MOD1_MASK || event->keyval < GDK_KEY_1 || event->keyval > GDK_KEY_4)
+            return FALSE;
+#ifdef HAVE_PLAYER
+        auto* view = GTK_WIDGET(g_object_get_data(G_OBJECT(widget), "player-view"));
+        if (view) setPlayerFullscreen(view, false);
+#else
+        (void)widget;
+#endif
+        const char* pages[] = {"gallery", "browser", "player", "files"};
+        gtk_stack_set_visible_child_name(GTK_STACK(data), pages[event->keyval - GDK_KEY_1]);
+        return TRUE;
+    };
+    g_signal_connect_object(window, "key-press-event", G_CALLBACK(navigatePage), navigationPages, G_CONNECT_DEFAULT);
     auto* toggle = GTK_SWITCH(gtk_builder_get_object(builder, "theme_switch"));
     atk_object_set_name(gtk_widget_get_accessible(GTK_WIDGET(toggle)), "Dark theme");
     gboolean dark = FALSE;
@@ -96,13 +126,18 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     gtk_widget_set_halign(GTK_WIDGET(player), GTK_ALIGN_FILL);
     gtk_widget_set_valign(GTK_WIDGET(player), GTK_ALIGN_FILL);
     auto* playerView = createPlayerView();
+    g_object_set_data(G_OBJECT(window), "player-view", playerView);
     gtk_box_pack_start(player, playerView, TRUE, TRUE, 0);
     // Run before GtkWindow forwards keys to the focused child.
-    g_signal_connect_object(window, "key-press-event", G_CALLBACK(+[](GtkWidget*, GdkEventKey* event, gpointer view) -> gboolean {
+    g_signal_connect_object(window, "key-press-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventKey* event, gpointer view) -> gboolean {
+        if (focusAcceptsText(widget)) return FALSE;
         if (event->keyval == GDK_KEY_Escape) {
             setPlayerFullscreen(GTK_WIDGET(view), false);
             return TRUE;
         }
+        auto* pages = GTK_STACK(gtk_widget_get_ancestor(GTK_WIDGET(view), GTK_TYPE_STACK));
+        if (pages && g_strcmp0(gtk_stack_get_visible_child_name(pages), "files") == 0)
+            return FALSE;
         return handlePlayerKey(GTK_WIDGET(view), event);
     }), playerView, G_CONNECT_DEFAULT);
     g_signal_connect_object(window, "window-state-event", G_CALLBACK(+[](GtkWidget*, GdkEventWindowState* event, gpointer view) -> gboolean {
@@ -141,6 +176,16 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     gtk_box_pack_start(browserPage, tabs, TRUE, TRUE, 0);
     g_object_set_data(G_OBJECT(window), "discovery-view", browser);
 #endif
+    auto* filesPage = GTK_BOX(gtk_builder_get_object(builder, "files_page"));
+#ifdef HAVE_PLAYER
+    auto* filesView = createFilesView([navigationPages, playerView](const std::string& filename) {
+        gtk_stack_set_visible_child_name(navigationPages, "player");
+        openPlayerFile(playerView, filename.c_str());
+    });
+#else
+    auto* filesView = createFilesView();
+#endif
+    gtk_box_pack_start(filesPage, filesView, TRUE, TRUE, 0);
     g_object_unref(builder);
     return window;
 }

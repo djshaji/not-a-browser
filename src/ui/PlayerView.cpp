@@ -20,7 +20,7 @@ public:
     GtkWidget* status = gtk_label_new("Open a local video or a direct media URL");
     GtkWidget* position = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 1, 1);
     GtkWidget* volume = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
-    GtkWidget* mute = gtk_toggle_button_new_with_label("Muted");
+    GtkWidget* mute = gtk_toggle_button_new();
     GtkWidget* play = gtk_button_new_with_label("Play");
     GtkWidget* speed = gtk_combo_box_text_new();
     GtkWidget* reverse = gtk_toggle_button_new();
@@ -69,12 +69,30 @@ public:
         gtk_widget_set_name(position, "player-position");
         gtk_widget_set_name(volume, "player-volume");
         gtk_widget_set_name(mute, "player-mute");
-        gtk_widget_set_size_request(volume, 120, -1);
+        gtk_widget_set_size_request(volume, 140, -1);
+        gtk_scale_set_draw_value(GTK_SCALE(volume), FALSE);
+        gtk_widget_set_tooltip_text(volume, "Volume");
+        atk_object_set_name(gtk_widget_get_accessible(volume), "Volume");
+        gtk_widget_set_name(controls, "player-secondary-controls");
         gtk_widget_set_name(speed, "player-speed");
         for (const char* value : {"0.5", "1.0", "1.5", "2.0"})
             gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(speed), value);
         gtk_combo_box_set_active(GTK_COMBO_BOX(speed), 1);
-        auto* full = gtk_button_new_with_label("Fullscreen");
+        auto* full = gtk_button_new();
+        auto styleSecondary = [](GtkWidget* button, const char* icon, const char* name, const char* tooltip) {
+            auto* image = gtk_image_new_from_icon_name(icon, GTK_ICON_SIZE_BUTTON);
+            gtk_image_set_pixel_size(GTK_IMAGE(image), 20);
+            gtk_button_set_image(GTK_BUTTON(button), image);
+            gtk_button_set_always_show_image(GTK_BUTTON(button), TRUE);
+            gtk_widget_set_name(button, name);
+            gtk_widget_set_tooltip_text(button, tooltip);
+            atk_object_set_name(gtk_widget_get_accessible(button), tooltip);
+            gtk_style_context_add_class(gtk_widget_get_style_context(button), "player-secondary-button");
+            gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
+            gtk_widget_set_size_request(button, 42, 42);
+        };
+        styleSecondary(mute, "audio-volume-muted-symbolic", "player-mute", "Unmute (M)");
+        styleSecondary(full, "view-fullscreen-symbolic", "player-fullscreen", "Fullscreen (F)");
         auto* transport = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
         gtk_widget_set_halign(transport, GTK_ALIGN_CENTER);
         gtk_widget_set_name(transport, "player-transport");
@@ -123,7 +141,6 @@ public:
             })), this);
         }
         gtk_box_pack_start(GTK_BOX(controls), mute, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(controls), gtk_label_new("Volume"), FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(controls), volume, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(controls), speed, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(controls), full, FALSE, FALSE, 0);
@@ -490,7 +507,12 @@ public:
                     else if (event->reply_userdata == 5) {
                         updating = true;
                         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(mute), active);
-                        gtk_button_set_label(GTK_BUTTON(mute), active ? "Muted" : "Mute");
+                        gtk_image_set_from_icon_name(GTK_IMAGE(gtk_button_get_image(GTK_BUTTON(mute))),
+                            active ? "audio-volume-muted-symbolic" : "audio-volume-high-symbolic", GTK_ICON_SIZE_BUTTON);
+                        gtk_image_set_pixel_size(GTK_IMAGE(gtk_button_get_image(GTK_BUTTON(mute))), 20);
+                        const char* tooltip = active ? "Unmute (M)" : "Mute (M)";
+                        gtk_widget_set_tooltip_text(mute, tooltip);
+                        atk_object_set_name(gtk_widget_get_accessible(mute), tooltip);
                         updating = false;
                     } else if (event->reply_userdata == 6) {
                         bool wasAtEnd = atEnd;

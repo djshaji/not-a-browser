@@ -127,10 +127,11 @@ libmpv saves resume state when replacing a playing file or closing the applicati
 
 ## Keyboard shortcuts
 
-Shortcuts work throughout the main window, including in fullscreen and while text fields have focus. Shift variants are accepted; Ctrl/Alt/Super combinations retain their normal behavior. These single-key shortcuts also take precedence over typing their characters into an entry.
+Single-key shortcuts work throughout the main window and in fullscreen when focus is outside text fields and embedded web pages. Text fields and web pages receive their normal typing and navigation keys, including Q. Alt+1–4 page shortcuts remain available while typing. Shift variants are accepted; other Ctrl/Alt/Super combinations retain their normal behavior.
 
 | Key | Action |
 | --- | --- |
+| **Alt+1** / **Alt+2** / **Alt+3** / **Alt+4** | Switch to Library / Discover / Player / Files, leaving fullscreen if needed. |
 | **F** | Toggle video-only fullscreen. |
 | **Escape** | Leave fullscreen and restore the previous page. |
 | **P** | Toggle play/pause, or replay an ended video. |
@@ -260,3 +261,5 @@ user files requires **Reload profiles** in the relevant tab, but no restart or r
 The application includes the library/gallery, a libmpv player through `GtkGLArea`, WebKit DOM-based HLS discovery, and sample listing profiles with bounded pagination. Future work includes production website profiles, richer metadata, infinite scrolling, folder/tag editing, and release hardening. See [Plan.md](Plan.md) for the longer-term design; some planned features remain unimplemented.
 
 See [Plan.md](Plan.md) for architecture and phase acceptance criteria, and [AGENTS.md](AGENTS.md) for contributor guidelines. Source modules live in `src/app/`, `src/ui/`, `src/database/`, `src/models/`, and `src/services/`; embedded assets are in `resources/`, and tests are in `tests/`.
+
+The **Files** page browses local folders using the native file browser, including folder shortcuts and video/all-file filters. Double-click a file or choose **Play selected video** to open it in Player.
