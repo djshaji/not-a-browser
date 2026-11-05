@@ -84,7 +84,7 @@ The Library management milestone consists of these implemented slices:
    pagination, and matches roots only. Undo restores all folder relationships.
 
 These management slices originally used schema version 2; playback history now adds schema version 3. Global tag
-renaming/deletion, choosers, folder trees, folder rename/deletion, and multiple-tag
+renaming/deletion, folder trees, folder rename/deletion, and multiple-tag
 filters remain unimplemented. Keep repository queries and rendered gallery pages bounded; introduce transactional, versioned
 migrations only when storage changes are required.
 
@@ -114,6 +114,17 @@ ctest --test-dir build -R '^(database|ui-smoke)$' --output-on-failure
 Manually inspect editor fields, filter results, and removal/Undo feedback. Use
 temporary XDG directories. Run the full suite when shared model/repository changes
 affect discovery or listing saves.
+
+## Tag and folder choosers (implemented)
+
+Library Tag/Folder filters complete existing names from literal, case-sensitive
+prefixes. The bookmark editor provides editable dropdowns with Add actions that
+append existing or new names to its per-line fields, deduplicating against trimmed
+lines. Save remains atomic and Cancel discards chooser changes. Root folders only
+are suggested, with duplicate names collapsed; unassigned global names remain
+available. Each asynchronous lookup returns at most 50 names, with debouncing,
+cancellation, and generation/lifetime guards. Narrow large lists by typing a
+prefix. Lookups refresh on focus and after Library queries. No migration is needed.
 
 ## Following milestones
 

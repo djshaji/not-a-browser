@@ -121,6 +121,18 @@ std::vector<std::string> LibraryRepository::videoRootFolders(std::int64_t videoI
     while (select.step()) result.push_back(select.textColumn(0));
     return result;
 }
+std::vector<std::string> LibraryRepository::assignmentNames(bool folders, const std::string& prefix, int limit) {
+    if (limit < 1 || limit > 100) throw std::invalid_argument("Invalid suggestion limit");
+    const std::string sql = std::string("SELECT DISTINCT name FROM ") + (folders ? "folders" : "tags") +
+        " WHERE " + (folders ? "parent_id IS NULL AND " : "") +
+        "substr(name,1,length(?))=? COLLATE BINARY ORDER BY name COLLATE BINARY LIMIT ?";
+    Statement select(db,sql.c_str());
+    const auto normalized = trimName(prefix);
+    select.text(1,normalized); select.text(2,normalized); select.integer(3,limit);
+    std::vector<std::string> result;
+    while (select.step()) result.push_back(select.textColumn(0));
+    return result;
+}
 RemovedBookmark LibraryRepository::removeBookmark(std::int64_t videoId) {
     db.execute("BEGIN IMMEDIATE");
     try {

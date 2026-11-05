@@ -74,6 +74,8 @@ int main(int argc, char** argv) {
         streamgallery::Database db((libraryDirectory / "library.db").string());
         streamgallery::LibraryRepository library(db);
         auto batchTag = library.createTag("Batch");
+        library.createTag("Music");
+        library.createFolder("Watch later");
         auto collection = library.createFolder("Collection");
         for (int index = 0; index < 30; ++index) {
             auto video = library.bookmark("https://example.com/" + std::to_string(index),
@@ -125,6 +127,24 @@ int main(int argc, char** argv) {
         auto* flow = GTK_CONTAINER(findNamed(window,"library-videos"));
         g_assert_nonnull(status); g_assert_nonnull(flow);
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status),"1–24 of 30 videos")==0; });
+        // Filter completion selects a full exact name rather than applying its prefix.
+        auto* suggestedTag = GTK_ENTRY(findNamed(window,"library-tag-filter"));
+        gtk_entry_set_text(suggestedTag,"Bat");
+        auto* completion = gtk_entry_get_completion(suggestedTag);
+        g_assert_nonnull(completion);
+        waitFor([&] {
+            auto* model = gtk_entry_completion_get_model(completion);
+            return model && gtk_tree_model_iter_n_children(model,nullptr) == 1;
+        });
+        auto* suggestionModel = gtk_entry_completion_get_model(completion);
+        GtkTreeIter suggestion;
+        g_assert_true(gtk_tree_model_get_iter_first(suggestionModel,&suggestion));
+        gboolean suggestionHandled = FALSE;
+        g_signal_emit_by_name(completion,"match-selected",suggestionModel,&suggestion,&suggestionHandled);
+        g_assert_cmpstr(gtk_entry_get_text(suggestedTag), ==, "Batch");
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status),"1–24 of 30 videos") == 0; });
+        gtk_entry_set_text(suggestedTag,"");
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status),"1–24 of 30 videos") == 0; });
         auto childCount = [&] {
             GList* children = gtk_container_get_children(flow);
             const guint count = g_list_length(children); g_list_free(children); return count;
@@ -199,11 +219,37 @@ int main(int argc, char** argv) {
             std::string result(text); g_free(text);
             return result;
         };
+        auto chooseName = [&](const char* widgetName, const char* name) {
+            auto* combo = GTK_COMBO_BOX(findNamed(editor,widgetName));
+            g_assert_nonnull(combo);
+            int selected = -1;
+            waitFor([&] {
+                auto* model = gtk_combo_box_get_model(combo);
+                GtkTreeIter row;
+                selected = -1;
+                int index = 0;
+                if (model && gtk_tree_model_get_iter_first(model,&row)) do {
+                    gchar* value = nullptr;
+                    gtk_tree_model_get(model,&row,0,&value,-1);
+                    if (g_strcmp0(value,name) == 0) selected = index;
+                    g_free(value); ++index;
+                } while (gtk_tree_model_iter_next(model,&row));
+                return selected >= 0;
+            });
+            gtk_combo_box_set_active(combo,selected);
+        };
+        const auto originalTags = readTags();
         const auto originalFolders = readFolders();
+        chooseName("library-edit-tag-chooser","Music");
+        gtk_button_clicked(GTK_BUTTON(findNamed(editor,"library-edit-tag-add")));
+        g_assert_true(readTags().find("Music") != std::string::npos);
+        chooseName("library-edit-folder-chooser","Watch later");
+        gtk_button_clicked(GTK_BUTTON(findNamed(editor,"library-edit-folder-add")));
+        g_assert_true(readFolders().find("Watch later") != std::string::npos);
+        // Cancel below must discard chooser changes too.
         g_assert_true(originalFolders.find("Collection") != std::string::npos);
         if (iteration == 1) g_assert_true(originalFolders.find("Watch later") != std::string::npos);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-folders"))), "Discarded folder", -1);
-        const auto originalTags = readTags();
         g_assert_true(originalTags.find("Batch") != std::string::npos);
         if (iteration == 1) g_assert_true(originalTags.find("Music") != std::string::npos);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-tags"))), "Discarded tag", -1);
@@ -218,20 +264,34 @@ int main(int argc, char** argv) {
         g_assert_true(readTags() == originalTags);
         g_assert_true(readFolders() == originalFolders);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-folders"))),
-            "Collection\n Watch later \nWatch later\n", -1);
+            "Collection\n", -1);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-tags"))),
-            iteration == 0 ? "Batch\nMusic\nMusic\n Live, acoustic \n" : "Batch\nMusic", -1);
+            "Batch", -1);
+        if (iteration == 0) {
+            auto* combo = findNamed(editor,"library-edit-tag-chooser");
+            gtk_entry_set_text(GTK_ENTRY(gtk_bin_get_child(GTK_BIN(combo)))," Live, acoustic ");
+            gtk_button_clicked(GTK_BUTTON(findNamed(editor,"library-edit-tag-add")));
+        }
+        chooseName("library-edit-tag-chooser","Music");
+        gtk_button_clicked(GTK_BUTTON(findNamed(editor,"library-edit-tag-add")));
+        chooseName("library-edit-tag-chooser","Music");
+        gtk_button_clicked(GTK_BUTTON(findNamed(editor,"library-edit-tag-add")));
+        g_assert_true(readTags().find("Music\nMusic") == std::string::npos);
+        chooseName("library-edit-folder-chooser","Watch later");
+        gtk_button_clicked(GTK_BUTTON(findNamed(editor,"library-edit-folder-add")));
         const char* editedTitle = iteration == 0 ? "Unique edited concert" : "Renamed concert";
         gtk_entry_set_text(GTK_ENTRY(findNamed(editor, "library-edit-title")), editedTitle);
         auto* description = GTK_TEXT_VIEW(findNamed(editor, "library-edit-description"));
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(description), "Persisted description", -1);
         if (const char* screenshot = g_getenv("STREAM_GALLERY_EDITOR_SCREENSHOT")) {
-            while (gtk_events_pending()) gtk_main_iteration();
-            GdkPixbuf* pixels = gdk_pixbuf_get_from_window(gtk_widget_get_window(editor), 0, 0,
-                gtk_widget_get_allocated_width(editor), gtk_widget_get_allocated_height(editor));
-            g_assert_nonnull(pixels);
-            g_assert_true(gdk_pixbuf_save(pixels, screenshot, "png", nullptr, nullptr));
-            g_object_unref(pixels);
+            gtk_test_widget_wait_for_draw(editor);
+            auto* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                gtk_widget_get_allocated_width(editor),gtk_widget_get_allocated_height(editor));
+            auto* context = cairo_create(surface);
+            gtk_widget_draw(editor,context);
+            g_assert_cmpint(cairo_surface_write_to_png(surface,screenshot), ==, CAIRO_STATUS_SUCCESS);
+            cairo_destroy(context);
+            cairo_surface_destroy(surface);
         }
         gtk_dialog_response(GTK_DIALOG(editor), GTK_RESPONSE_ACCEPT);
         // Changing pages during a save must not discard it or target another record.

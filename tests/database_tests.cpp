@@ -73,6 +73,30 @@ int main() {
             check(library.videos()[0].title=="Other");
             check(scalar(db,"PRAGMA user_version")==3);
         }
+        {
+            streamgallery::Database db((path.parent_path() / "suggestions.db").string());
+            streamgallery::LibraryRepository library(db);
+            library.createTag("Music"); library.createTag("music");
+            library.createTag("Live, acoustic"); library.createTag("100%_literal");
+            library.createTag("100xxliteral"); library.createTag("Quoted ' name");
+            library.createTag(" संगीत ");
+            auto root = library.createFolder("Music");
+            library.createFolder("Music"); library.createFolder("Nested only",root.id);
+            library.createFolder("music");
+            check(library.assignmentNames(false,"Mus") == std::vector<std::string>{"Music"});
+            check(library.assignmentNames(false," mus ") == std::vector<std::string>{"music"});
+            check(library.assignmentNames(false,"100%_") == std::vector<std::string>{"100%_literal"});
+            check(library.assignmentNames(false,"Quoted '") == std::vector<std::string>{"Quoted ' name"});
+            check(library.assignmentNames(false,"सं") == std::vector<std::string>{"संगीत"});
+            check(library.assignmentNames(true) == (std::vector<std::string>{"Music","music"}));
+            check(library.assignmentNames(true,"Nested").empty());
+            for (int i = 0; i < 125; ++i) library.createTag("Many " + std::to_string(i));
+            check(library.assignmentNames(false,"Many").size() == 50);
+            check(library.assignmentNames(false,"Many",100).size() == 100);
+            bool invalid = false;
+            try { library.assignmentNames(false,"",101); } catch (const std::invalid_argument&) { invalid = true; }
+            check(invalid);
+        }
         const auto historyPath = path.parent_path() / "history.db";
         {
             streamgallery::Database db(historyPath.string());

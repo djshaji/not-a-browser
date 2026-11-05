@@ -30,6 +30,8 @@ public:
                         const std::optional<std::vector<std::string>>& rootFolders = std::nullopt);
     std::vector<std::string> videoTags(std::int64_t videoId);
     std::vector<std::string> videoRootFolders(std::int64_t videoId);
+    // Distinct literal-prefix suggestions; folders include roots only.
+    std::vector<std::string> assignmentNames(bool folders, const std::string& prefix = "", int limit = 50);
     RemovedBookmark removeBookmark(std::int64_t videoId);
     void restoreBookmark(const RemovedBookmark& removed);
     // Updates an existing durable page only; never creates a bookmark.

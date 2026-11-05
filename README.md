@@ -113,7 +113,7 @@ through the CLI or another application; saves made in Discover refresh it automa
 - Choose **Grid** or **List**, then sort by newest, oldest, or title.
 - Choose **Recent** in the same dropdown to show only played bookmarks, most recently played first. Search, Tag, Folder, pagination, editing, and Undo work in Recent too.
 - Search matches title/description prefixes. Multiple terms must all match; FTS operators are not exposed.
-- **Tag** and **Folder** accept one exact, case-sensitive name each. They intersect with text search and each other. Surrounding spaces are trimmed; an empty field adds no restriction. Folder matches top-level memberships only, without including nested-folder contents.
+- **Tag** and **Folder** suggest existing names as you type. Choose a suggestion to fill the complete name; each filter accepts one exact, case-sensitive name. They intersect with text search and each other. Surrounding spaces are trimmed; an empty field adds no restriction. Folder matches top-level memberships only, without including nested-folder contents.
 - Changing search or either filter resets pagination. **Previous** and **Next** browse 24 records per page.
 - Select a card to display its page URL. **Discover & Play selected** loads that durable webpage and looks for HLS streams.
 
@@ -126,6 +126,15 @@ results. The page URL and thumbnail stay unchanged. **Cancel** discards unsaved
 edits. An initiated save continues across page navigation; errors remain in the
 editor for retry.
 
+Use the editor's **Choose or type a tag/folder** dropdowns to select existing
+names, then click **Add tag** or **Add folder**. You can also type a new name
+there. Add appends a line without duplicating an existing name; the changes take
+effect only when you choose **Save**. **Cancel** discards them. Dropdowns show up
+to 50 names; type a case-sensitive prefix to narrow the choices. Filter suggestions
+use the same limit. Suggestions include unassigned names, and folder choices
+include top-level names only, collapsing duplicate root names. Lookups run in
+background workers and refresh when fields receive focus or Library refreshes.
+
 Enter tags and folders one per line. Saving creates missing names and assigns
 them. Blank lines are ignored, surrounding spaces are trimmed, and repeated names
 do not create duplicate assignments. Names are case-sensitive; spaces and commas
@@ -137,7 +146,7 @@ assignments. For duplicate-named top-level folders, retained memberships are
 preserved, new assignments use the oldest matching folder, and the Folder filter
 matches all roots with that name. Library folders are collections; they do not
 create or modify directories in Files. Folder trees, rename/delete actions, and
-folder/tag choosers are not available yet.
+global tag rename/delete actions are not available yet.
 
 ### Remove and Undo
 
@@ -324,7 +333,7 @@ user files requires **Reload profiles** in the relevant tab, but no restart or r
 
 ## Roadmap and contribution
 
-Library supports title/description, tag, and top-level folder editing, combined exact-name tag/folder filters, and removal with a session Undo slot. Folder trees, folder rename/deletion, global tag renaming/deletion, choosers, and multiple-tag filters remain future work.
+Library supports title/description, tag, and top-level folder editing, combined exact-name tag/folder filters, and removal with a session Undo slot. Folder trees, folder rename/deletion, global tag renaming/deletion and multiple-tag filters remain future work.
 
 Following milestones are a profile for a regularly used website, nested folder organization, richer metadata, discovery expansion, and release hardening. Recent playback history is implemented for saved bookmarks. See [Plan.md](Plan.md) for scope, acceptance criteria, and validation expectations.
 

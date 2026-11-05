@@ -1,7 +1,9 @@
 #include "ui/GalleryView.hpp"
+#include "ui/NameSuggestions.hpp"
 #include "database/LibraryRepository.hpp"
 #include "services/ThumbnailService.hpp"
 #include <filesystem>
+#include <cstring>
 #include <algorithm>
 #include <initializer_list>
 #include <memory>
@@ -24,6 +26,7 @@ struct Gallery {
     GtkWidget* foldersView = nullptr;
     GtkWidget* folderFilter = nullptr;
     GtkWidget* editStatus = nullptr;
+    GtkWidget *tagChooser = nullptr, *folderChooser = nullptr;
     bool saving = false;
     bool changing = false;
     bool loading = true;
@@ -162,6 +165,8 @@ void queryReady(GObject*, GAsyncResult* result, gpointer) {
     }
     if (page->total && state->offset >= page->total) { state->offset = 0; loadPage(state); return; }
     if (!page->total) state->offset = 0;
+    refreshNameSuggestions(state->tagFilter);
+    refreshNameSuggestions(state->folderFilter);
     state->page = std::move(*page);
     render(state);
 }
@@ -233,6 +238,8 @@ void editReady(GObject*, GAsyncResult* result, gpointer) {
             gtk_widget_set_sensitive(state->descriptionView, TRUE);
             gtk_widget_set_sensitive(state->tagsView, TRUE);
             gtk_widget_set_sensitive(state->foldersView, TRUE);
+            gtk_widget_set_sensitive(state->tagChooser, TRUE);
+            gtk_widget_set_sensitive(state->folderChooser, TRUE);
             gtk_dialog_set_response_sensitive(GTK_DIALOG(state->editor), GTK_RESPONSE_ACCEPT, TRUE);
         } else {
             gtk_widget_destroy(state->editor);
@@ -242,6 +249,42 @@ void editReady(GObject*, GAsyncResult* result, gpointer) {
         }
     }
     g_clear_error(&error);
+}
+GtkWidget* assignmentChooser(GtkWidget* view, bool folders) {
+    auto* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
+    auto* combo = gtk_combo_box_text_new_with_entry();
+    auto* entry = gtk_bin_get_child(GTK_BIN(combo));
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry),folders ? "Choose or type a folder" : "Choose or type a tag");
+    gtk_widget_set_name(combo,folders ? "library-edit-folder-chooser" : "library-edit-tag-chooser");
+    atk_object_set_name(gtk_widget_get_accessible(combo),folders ? "Existing top-level folders" : "Existing tags");
+    atk_object_set_name(gtk_widget_get_accessible(entry),folders ? "Folder to add" : "Tag to add");
+    installNameSuggestions(entry,folders,combo);
+    auto* add = gtk_button_new_with_label(folders ? "Add folder" : "Add tag");
+    gtk_widget_set_name(add,folders ? "library-edit-folder-add" : "library-edit-tag-add");
+    g_object_set_data(G_OBJECT(add),"name-entry",entry);
+    g_signal_connect_object(add,"clicked",G_CALLBACK(+[](GtkButton* button, gpointer data) {
+        auto* entry = GTK_ENTRY(g_object_get_data(G_OBJECT(button),"name-entry"));
+        auto* name = g_strdup(gtk_entry_get_text(entry));
+        g_strstrip(name);
+        if (!*name) { g_free(name); return; }
+        auto* buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(data));
+        GtkTextIter start;
+        GtkTextIter end;
+        gtk_text_buffer_get_bounds(buffer,&start,&end);
+        auto* text = gtk_text_buffer_get_text(buffer,&start,&end,FALSE);
+        auto** lines = g_strsplit(text,"\n",-1);
+        bool exists = false;
+        for (int i = 0; lines[i]; ++i) if (g_strcmp0(g_strstrip(lines[i]),name) == 0) exists = true;
+        if (!exists) {
+            const std::string append = (*text && text[strlen(text)-1] != '\n' ? "\n" : "") + std::string(name);
+            gtk_text_buffer_insert(buffer,&end,append.c_str(),-1);
+        }
+        g_strfreev(lines); g_free(text); g_free(name);
+        gtk_entry_set_text(entry,"");
+    }),view,G_CONNECT_DEFAULT);
+    gtk_box_pack_start(GTK_BOX(row),combo,TRUE,TRUE,0);
+    gtk_box_pack_start(GTK_BOX(row),add,FALSE,FALSE,0);
+    return row;
 }
 void editSelected(GtkButton*, gpointer data) {
     auto state = shared(static_cast<Gallery*>(data));
@@ -257,7 +300,7 @@ void editSelected(GtkButton*, gpointer data) {
         static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
         "Cancel", GTK_RESPONSE_CANCEL, "Save", GTK_RESPONSE_ACCEPT, nullptr);
     gtk_widget_set_name(state->editor, "library-editor");
-    gtk_window_set_default_size(GTK_WINDOW(state->editor), 480, 600);
+    gtk_window_set_default_size(GTK_WINDOW(state->editor), 540, 700);
     auto* content = gtk_dialog_get_content_area(GTK_DIALOG(state->editor));
     gtk_container_set_border_width(GTK_CONTAINER(content), 12);
     gtk_box_set_spacing(GTK_BOX(content), 8);
@@ -302,14 +345,18 @@ void editSelected(GtkButton*, gpointer data) {
     auto* foldersScroll = gtk_scrolled_window_new(nullptr, nullptr);
     gtk_widget_set_size_request(foldersScroll, -1, 80);
     gtk_container_add(GTK_CONTAINER(foldersScroll), state->foldersView);
+    state->tagChooser = assignmentChooser(state->tagsView,false);
+    state->folderChooser = assignmentChooser(state->foldersView,true);
     state->editStatus = gtk_label_new("");
     gtk_label_set_line_wrap(GTK_LABEL(state->editStatus), TRUE);
     for (auto* widget : {titleLabel, state->titleEntry, descriptionLabel})
         gtk_box_pack_start(GTK_BOX(content), widget, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(content), scroll, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(content), tagsLabel, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), state->tagChooser, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(content), tagsScroll, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(content), foldersLabel, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), state->folderChooser, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(content), foldersScroll, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(content), state->editStatus, FALSE, FALSE, 0);
     g_object_set_data_full(G_OBJECT(state->editor), "edit-request",
@@ -357,6 +404,8 @@ void editSelected(GtkButton*, gpointer data) {
         gtk_widget_set_sensitive(state->descriptionView, FALSE);
         gtk_widget_set_sensitive(state->tagsView, FALSE);
         gtk_widget_set_sensitive(state->foldersView, FALSE);
+        gtk_widget_set_sensitive(state->tagChooser, FALSE);
+        gtk_widget_set_sensitive(state->folderChooser, FALSE);
         gtk_dialog_set_response_sensitive(dialog, GTK_RESPONSE_ACCEPT, FALSE);
         gtk_label_set_text(GTK_LABEL(state->editStatus), "Saving…");
         // Writes finish independently of gallery query cancellation or destruction.
@@ -494,6 +543,8 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     gtk_box_pack_start(GTK_BOX(filterRow), folderLabel, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(filterRow), state->folderFilter, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(state->root), filterRow, FALSE, FALSE, 0);
+    installNameSuggestions(state->tagFilter,false);
+    installNameSuggestions(state->folderFilter,true);
     auto* scroll = gtk_scrolled_window_new(nullptr,nullptr);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);
     state->flow = gtk_flow_box_new();
