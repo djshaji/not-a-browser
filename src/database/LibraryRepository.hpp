@@ -13,12 +13,19 @@ struct BookmarkResult {
     Video video;
     bool created = false;
 };
+struct RemovedBookmark {
+    Video video;
+    std::string addedAt;
+    std::vector<std::int64_t> folderIds, tagIds;
+};
 class LibraryRepository {
 public:
     explicit LibraryRepository(Database& database) : db(database) {}
     Video bookmark(const std::string& url, const std::string& title, const std::string& thumbnailUrl = "");
     BookmarkResult bookmarkWithStatus(const std::string& url, const std::string& title, const std::string& thumbnailUrl = "");
     void updateMetadata(std::int64_t videoId, const std::string& title, const std::string& description);
+    RemovedBookmark removeBookmark(std::int64_t videoId);
+    void restoreBookmark(const RemovedBookmark& removed);
     std::vector<Video> videos();
     VideoPage page(const std::string& search, VideoSort sort, int offset, int limit = 24);
     Folder createFolder(const std::string& name, std::int64_t parentId = 0);

@@ -12,7 +12,7 @@ until implemented and validated.
 | Area | Implemented behavior |
 | --- | --- |
 | Application | Native window, resizable sidebar, Library/Discover/Player/Files navigation, session theme switch, and keyboard shortcuts. |
-| Library | SQLite schema version 2, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, and asynchronous selected-bookmark title/description editing. |
+| Library | SQLite schema version 2, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, and asynchronous selected-bookmark editing, and removal with session Undo. |
 | Gallery | Grid/list views, selection, title/description prefix search, sorting, 24-item pagination, asynchronous queries, and bounded thumbnail caching. |
 | Playback | GtkGLArea/libmpv rendering, local files and direct media URLs, muted startup, seeking, reverse/forward 2×, speed controls, fullscreen, EOF/replay, and mpv resume files. |
 | Files | Native local file chooser, video/all-file filters, playback activation, and session folder/selection restoration across page switches. Browsing remains available without playback. |
@@ -21,8 +21,8 @@ until implemented and validated.
 | User profiles | Validated JSON listing profiles and a generic HLS override from the XDG config directory, with Reload profiles and built-in fallback. |
 | Validation | Database, thumbnails, adapter profiles, HLS inspection, rendered discovery, listings, UI smoke, and Python fixture-runner tests. |
 
-Folder/tag creation and video relationship APIs exist. Their editing UI,
-removal/Undo, and tag filtering are not implemented. The `Video` model and
+Folder/tag creation and video relationship APIs exist. Their editing UI
+and tag filtering are not implemented. Removal with one session Undo slot is implemented. The `Video` model and
 repository queries expose descriptions, and metadata updates maintain FTS through
 the existing database triggers. Playback resume currently belongs to
 libmpv; there is no library-level Recent/history workflow.
@@ -63,18 +63,21 @@ independently usable steps:
    description. The model/repository read and update descriptions.
    The canonical URL and bookmark identity stay stable. The gallery refreshes after
    success and FTS results reflect edits.
-2. **Remove with Undo.** Add explicit removal and a clearly scoped Undo action.
-   Define Undo lifetime and duplicate/conflict behavior before implementation.
-   Restore bookmark metadata and folder/tag relationships transactionally;
-   deleting a bookmark must never delete a local media file.
+2. **Remove with Undo (implemented).** Removal captures metadata, saved timestamp,
+   and folder/tag relationships and deletes the record in one transaction. One
+   in-memory Undo slot lasts until the next successful removal or gallery/window
+   destruction. Undo restores the snapshot transactionally. Duplicate URLs and
+   missing relationships fail without partial changes, retaining the snapshot for
+   retry. Reuse the original record ID when free; allocate a new ID if occupied,
+   which can change newest/oldest ordering. Removal never deletes a media file.
 3. **Assign and filter tags.** Add tag listing and assignment/removal controls,
    plus a gallery tag filter. Extend repository queries so filters compose with
    text search, sorting, counts, and pagination. Reset or clamp pages when results
    shrink. Keep queries and rendered widgets bounded.
 
-Existing folder/tag APIs and metadata editing are a starting point; deletion,
-restoration, tag enumeration/removal, and filtered queries still need repository
-support. Prefer the existing schema where sufficient. Introduce transactional,
+Existing folder/tag APIs, metadata editing, and transactional removal/restoration
+are a starting point; tag enumeration/removal and filtered queries still need
+repository support. Prefer the existing schema where sufficient. Introduce transactional,
 versioned migrations only when storage changes are required.
 
 All writes run in database workers. Capture the selected record's identity at
@@ -144,5 +147,5 @@ visible UI changes; and update README.md with actual behavior. Keep this roadmap
 current as milestones land. Do not present planned controls as working features.
 
 Use the build and test commands in README.md and the feature-specific validation
-rules in AGENTS.md. Metadata editing is implemented; removal with Undo is the next proposed
-development slice within bookmark management.
+rules in AGENTS.md. Metadata editing and removal with Undo are implemented; tag assignment/filtering
+is the next proposed development slice within bookmark management.

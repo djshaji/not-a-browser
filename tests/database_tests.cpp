@@ -118,6 +118,61 @@ int main() {
             check(lastPage.total == 10000 && lastPage.items.size() == 16);
             check(library.page("Video",streamgallery::VideoSort::Oldest,0).total == 10000);
         }
+        const auto removalPath = path.parent_path() / "removal.db";
+        streamgallery::RemovedBookmark snapshot;
+        {
+            streamgallery::Database db(removalPath.string());
+            streamgallery::LibraryRepository library(db);
+            auto video = library.bookmark("https://example.com/remove", "Original", "https://example.com/poster.jpg");
+            library.updateMetadata(video.id, "Original", "Searchable description");
+            auto folder = library.createFolder("Keep folder");
+            auto tag = library.createTag("Keep tag");
+            library.addToFolder(video.id, folder.id); library.tagVideo(video.id, tag.id);
+            snapshot = library.removeBookmark(video.id);
+            check(snapshot.video.description == "Searchable description");
+            check(snapshot.folderIds.size() == 1 && snapshot.tagIds.size() == 1);
+            check(library.videos().empty());
+            check(library.page("Searchable", streamgallery::VideoSort::Newest, 0).total == 0);
+            check(scalar(db,"SELECT count(*) FROM video_tags") == 0);
+            bool missing = false;
+            try { library.removeBookmark(video.id); } catch (const std::exception&) { missing = true; }
+            check(missing);
+            // An unrelated insert may reuse the deleted ID; it must survive Undo.
+            auto unrelated = library.bookmark("https://example.com/unrelated", "Unrelated");
+            check(unrelated.id == video.id);
+            library.restoreBookmark(snapshot);
+            auto restored = library.page("Searchable", streamgallery::VideoSort::Newest, 0);
+            check(restored.total == 1 && restored.items[0].id != unrelated.id);
+            check(restored.items[0].thumbnailUrl == snapshot.video.thumbnailUrl);
+            check(restored.items[0].canonicalUrl == snapshot.video.canonicalUrl);
+            check(scalar(db,"SELECT count(*) FROM video_tags") == 1);
+            check(scalar(db,"SELECT count(*) FROM video_folders") == 1);
+            snapshot = library.removeBookmark(restored.items[0].id);
+            auto replacement = library.bookmark(snapshot.video.canonicalUrl, "New metadata");
+            bool conflict = false;
+            try { library.restoreBookmark(snapshot); } catch (const std::exception&) { conflict = true; }
+            check(conflict);
+            check(library.page("New", streamgallery::VideoSort::Newest, 0).total == 1);
+            library.removeBookmark(replacement.id);
+            // A missing relationship must roll back the entire restoration.
+            auto invalid = snapshot;
+            invalid.tagIds.push_back(99999);
+            bool rolledBack = false;
+            try { library.restoreBookmark(invalid); } catch (const std::exception&) { rolledBack = true; }
+            check(rolledBack && library.page("Searchable", streamgallery::VideoSort::Newest, 0).total == 0);
+            check(scalar(db,"SELECT count(*) FROM video_folders") == 0);
+            library.restoreBookmark(snapshot);
+        }
+        {
+            streamgallery::Database db(removalPath.string());
+            streamgallery::LibraryRepository library(db);
+            check(library.videos().size() == 2);
+            auto restored = library.page("Searchable", streamgallery::VideoSort::Newest, 0);
+            check(restored.total == 1 && restored.items[0].title == "Original");
+            check(scalar(db,"SELECT count(*) FROM videos WHERE added_at IS NOT NULL") == 2);
+            check(scalar(db,"SELECT count(*) FROM video_tags") == 1);
+            check(scalar(db,"SELECT count(*) FROM video_folders") == 1);
+        }
         // Simulate a persisted version-1 database from the previous release.
         const auto legacyPath = path.parent_path() / "legacy.db";
         sqlite3* legacy = nullptr;

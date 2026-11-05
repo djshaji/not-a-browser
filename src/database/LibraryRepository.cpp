@@ -67,6 +67,46 @@ void LibraryRepository::updateMetadata(std::int64_t videoId, const std::string& 
     update.text(1,title); update.text(2,description); update.integer(3,videoId); update.step();
     if (sqlite3_changes(db.handle()) != 1) throw std::runtime_error("Bookmark no longer exists");
 }
+RemovedBookmark LibraryRepository::removeBookmark(std::int64_t videoId) {
+    db.execute("BEGIN IMMEDIATE");
+    try {
+        RemovedBookmark removed;
+        Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description,added_at FROM videos WHERE id=?");
+        select.integer(1,videoId);
+        if (!select.step()) throw std::runtime_error("Bookmark no longer exists");
+        removed.video = {select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4)};
+        removed.addedAt = select.textColumn(5);
+        Statement folders(db,"SELECT folder_id FROM video_folders WHERE video_id=?");
+        folders.integer(1,videoId);
+        while (folders.step()) removed.folderIds.push_back(folders.id());
+        Statement tags(db,"SELECT tag_id FROM video_tags WHERE video_id=?");
+        tags.integer(1,videoId);
+        while (tags.step()) removed.tagIds.push_back(tags.id());
+        Statement remove(db,"DELETE FROM videos WHERE id=?");
+        remove.integer(1,videoId); remove.step();
+        db.execute("COMMIT");
+        return removed;
+    } catch (...) { db.execute("ROLLBACK"); throw; }
+}
+void LibraryRepository::restoreBookmark(const RemovedBookmark& removed) {
+    db.execute("BEGIN IMMEDIATE");
+    try {
+        Statement duplicate(db,"SELECT id FROM videos WHERE canonical_url=?");
+        duplicate.text(1,removed.video.canonicalUrl);
+        if (duplicate.step()) throw std::runtime_error("Cannot undo: this URL is already in Library. The existing bookmark was kept; Undo remains available.");
+        Statement occupied(db,"SELECT id FROM videos WHERE id=?");
+        occupied.integer(1,removed.video.id);
+        const auto id = occupied.step() ? 0 : removed.video.id;
+        Statement insert(db,"INSERT INTO videos(id,canonical_url,title,thumbnail_url,description,added_at) VALUES(NULLIF(?,0),?,?,?,?,?)");
+        insert.integer(1,id); insert.text(2,removed.video.canonicalUrl); insert.text(3,removed.video.title);
+        insert.text(4,removed.video.thumbnailUrl); insert.text(5,removed.video.description); insert.text(6,removed.addedAt);
+        insert.step();
+        const auto restoredId = sqlite3_last_insert_rowid(db.handle());
+        for (auto folder : removed.folderIds) addToFolder(restoredId,folder);
+        for (auto tag : removed.tagIds) tagVideo(restoredId,tag);
+        db.execute("COMMIT");
+    } catch (...) { db.execute("ROLLBACK"); throw; }
+}
 std::vector<Video> LibraryRepository::videos() {
     Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description FROM videos ORDER BY id");
     std::vector<Video> result;

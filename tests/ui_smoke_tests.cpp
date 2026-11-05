@@ -9,6 +9,7 @@
 #endif
 #ifdef HAVE_LIBRARY_TESTS
 #include "database/LibraryRepository.hpp"
+#include "ui/GalleryView.hpp"
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -127,6 +128,19 @@ int main(int argc, char** argv) {
         gtk_button_clicked(GTK_BUTTON(findNamed(window,"library-next")));
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status),"25–30 of 30 videos")==0; });
         g_assert_cmpuint(childCount(),==,6);
+        auto* removeButton = findNamed(window, "library-remove");
+        auto* undo = findNamed(window, "library-undo");
+        auto* actionStatus = GTK_LABEL(findNamed(window, "library-action-status"));
+        g_assert_false(gtk_widget_get_sensitive(removeButton));
+        g_assert_false(gtk_widget_get_sensitive(undo));
+        gtk_flow_box_select_child(GTK_FLOW_BOX(flow), gtk_flow_box_get_child_at_index(GTK_FLOW_BOX(flow), 0));
+        gtk_button_clicked(GTK_BUTTON(removeButton));
+        g_assert_false(gtk_widget_get_sensitive(removeButton));
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "25–29 of 29 videos") == 0; });
+        g_assert_true(gtk_widget_get_sensitive(undo));
+        gtk_button_clicked(GTK_BUTTON(undo));
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "25–30 of 30 videos") == 0; });
+        g_assert_false(gtk_widget_get_sensitive(undo));
         gtk_combo_box_set_active(GTK_COMBO_BOX(findNamed(window,"library-mode")),1);
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status),"25–30 of 30 videos")==0; });
         g_assert_cmpuint(gtk_flow_box_get_max_children_per_line(GTK_FLOW_BOX(flow)),==,1);
@@ -182,6 +196,39 @@ int main(int argc, char** argv) {
                 g_str_has_prefix(gtk_label_get_text(status), "No videos found.")); });
         g_assert_cmpuint(childCount(), ==, iteration == 0 ? 1 : 0);
         gtk_stack_set_visible_child_name(stack, "gallery");
+        gtk_entry_set_text(GTK_ENTRY(findNamed(window, "library-search")), "Persisted");
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "1–1 of 1 videos") == 0; });
+        gtk_flow_box_select_child(GTK_FLOW_BOX(flow), gtk_flow_box_get_child_at_index(GTK_FLOW_BOX(flow), 0));
+        gtk_button_clicked(GTK_BUTTON(removeButton));
+        gtk_stack_set_visible_child_name(stack, "files");
+        waitFor([&] { return gtk_widget_get_sensitive(undo) && childCount() == 0; });
+        {
+            streamgallery::Database db((libraryDirectory / "library.db").string());
+            streamgallery::LibraryRepository(db).bookmark("https://example.com/0", "Replacement");
+        }
+        gtk_button_clicked(GTK_BUTTON(undo));
+        waitFor([&] { return g_str_has_prefix(gtk_label_get_text(actionStatus), "Cannot undo:"); });
+        g_assert_true(gtk_widget_get_sensitive(undo));
+        {
+            streamgallery::Database db((libraryDirectory / "library.db").string());
+            streamgallery::LibraryRepository library(db);
+            auto duplicate = library.page("Replacement", streamgallery::VideoSort::Newest, 0);
+            g_assert_cmpint(duplicate.total, ==, 1);
+            library.removeBookmark(duplicate.items[0].id);
+        }
+        gtk_button_clicked(GTK_BUTTON(undo));
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "1–1 of 1 videos") == 0 &&
+            !gtk_widget_get_sensitive(undo); });
+        gtk_stack_set_visible_child_name(stack, "gallery");
+        if (const char* screenshot = g_getenv("STREAM_GALLERY_LIBRARY_SCREENSHOT")) {
+            waitFor([&] { return !gtk_stack_get_transition_running(stack); });
+            while (gtk_events_pending()) gtk_main_iteration();
+            GdkPixbuf* pixels = gdk_pixbuf_get_from_window(gtk_widget_get_window(window), 0, 0,
+                gtk_widget_get_allocated_width(window), gtk_widget_get_allocated_height(window));
+            g_assert_nonnull(pixels);
+            g_assert_true(gdk_pixbuf_save(pixels, screenshot, "png", nullptr, nullptr));
+            g_object_unref(pixels);
+        }
 #endif
 #ifdef HAVE_PLAYER_TESTS
         g_assert_nonnull(findWidget(window, GTK_TYPE_GL_AREA));
@@ -438,6 +485,24 @@ int main(int argc, char** argv) {
         g_assert_true(destroyed);
         g_object_unref(window);
     }
+#ifdef HAVE_LIBRARY_TESTS
+    // A started removal must finish safely even when its widgets are destroyed.
+    auto* removalWindow = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    auto* removalGallery = streamgallery::createGalleryView();
+    gtk_container_add(GTK_CONTAINER(removalWindow), removalGallery);
+    gtk_widget_show_all(removalWindow);
+    auto* removalStatus = GTK_LABEL(findNamed(removalGallery, "library-status"));
+    waitFor([&] { return g_strcmp0(gtk_label_get_text(removalStatus), "1–24 of 30 videos") == 0; });
+    auto* removalFlow = GTK_FLOW_BOX(findNamed(removalGallery, "library-videos"));
+    gtk_flow_box_select_child(removalFlow, gtk_flow_box_get_child_at_index(removalFlow, 0));
+    gtk_button_clicked(GTK_BUTTON(findNamed(removalGallery, "library-remove")));
+    gtk_widget_destroy(removalWindow);
+    waitFor([&] {
+        streamgallery::Database db((libraryDirectory / "library.db").string());
+        return streamgallery::LibraryRepository(db).page("", streamgallery::VideoSort::Newest, 0).total == 29;
+    });
+    while (gtk_events_pending()) gtk_main_iteration();
+#endif
     g_object_unref(app);
 #ifdef HAVE_LIBRARY_TESTS
     std::filesystem::remove_all(testDirectory);

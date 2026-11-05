@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <initializer_list>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,10 @@ struct Gallery {
     GtkWidget* descriptionView = nullptr;
     GtkWidget* editStatus = nullptr;
     bool saving = false;
+    bool changing = false;
+    bool loading = true;
+    GtkWidget *remove = nullptr, *undo = nullptr, *actionStatus = nullptr;
+    std::optional<RemovedBookmark> removed;
     std::function<void(const std::string&)> openPage;
     GCancellable* cancellable = nullptr;
     guint debounce = 0;
@@ -47,6 +52,15 @@ GalleryPtr shared(Gallery* state) {
     return *static_cast<GalleryPtr*>(g_object_get_data(G_OBJECT(state->root),"gallery-state"));
 }
 void loadPage(const GalleryPtr& state);
+void updateActions(Gallery* state) {
+    if (state->closed) return;
+    GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(state->flow));
+    const bool available = selected && !state->loading && !state->changing && !state->editor;
+    gtk_widget_set_sensitive(state->edit, available);
+    gtk_widget_set_sensitive(state->remove, available);
+    gtk_widget_set_sensitive(state->undo, state->removed.has_value() && !state->changing && !state->editor);
+    g_list_free(selected);
+}
 void thumbnailWorker(GTask* task, gpointer, gpointer data, GCancellable* cancellable) {
     auto* request = static_cast<Thumbnail*>(data);
     auto* image = loadThumbnail(request->uri,cancellable);
@@ -68,7 +82,8 @@ void render(const GalleryPtr& state) {
     GList* children = gtk_container_get_children(GTK_CONTAINER(state->flow));
     for (auto* child = children; child; child = child->next) gtk_widget_destroy(GTK_WIDGET(child->data));
     g_list_free(children);
-    gtk_widget_set_sensitive(state->edit, FALSE);
+    state->loading = false;
+    updateActions(state.get());
     if (state->discover) gtk_widget_set_sensitive(state->discover, FALSE);
     gtk_label_set_text(GTK_LABEL(state->selection),"Select a bookmark to see its page URL.");
     const bool list = gtk_combo_box_get_active(GTK_COMBO_BOX(state->mode)) == 1;
@@ -137,6 +152,7 @@ void queryReady(GObject*, GAsyncResult* result, gpointer) {
         return;
     }
     if (page->total && state->offset >= page->total) { state->offset = 0; loadPage(state); return; }
+    if (!page->total) state->offset = 0;
     state->page = std::move(*page);
     render(state);
 }
@@ -146,6 +162,8 @@ void loadPage(const GalleryPtr& state) {
     g_clear_object(&state->cancellable);
     state->cancellable = g_cancellable_new();
     ++state->generation;
+    state->loading = true;
+    updateActions(state.get());
     gtk_widget_set_sensitive(state->previous,FALSE); gtk_widget_set_sensitive(state->next,FALSE);
     gtk_label_set_text(GTK_LABEL(state->status),"Loading library…");
     auto path = std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db";
@@ -160,6 +178,8 @@ void loadPage(const GalleryPtr& state) {
 void searchChanged(GtkSearchEntry*, gpointer data) {
     auto* state = static_cast<Gallery*>(data);
     if (state->debounce) g_source_remove(state->debounce);
+    state->loading = true;
+    updateActions(state);
     // Superseded results cannot overwrite the pending search.
     ++state->generation;
     if (state->cancellable) g_cancellable_cancel(state->cancellable);
@@ -208,7 +228,7 @@ void editReady(GObject*, GAsyncResult* result, gpointer) {
 }
 void editSelected(GtkButton*, gpointer data) {
     auto state = shared(static_cast<Gallery*>(data));
-    if (state->editor || state->saving) return;
+    if (state->editor || state->saving || state->changing || state->loading) return;
     GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(state->flow));
     if (!selected) return;
     const int index = gtk_flow_box_child_get_index(GTK_FLOW_BOX_CHILD(selected->data));
@@ -248,7 +268,9 @@ void editSelected(GtkButton*, gpointer data) {
             (std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db").string(), {}, {}},
         [](gpointer request) { delete static_cast<EditRequest*>(request); });
     g_signal_connect(state->editor, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer data) {
-        static_cast<Gallery*>(data)->editor = nullptr;
+        auto* state = static_cast<Gallery*>(data);
+        state->editor = nullptr;
+        if (!state->closed) updateActions(state);
     }), state.get());
     g_signal_connect(state->editor, "response", G_CALLBACK(+[](GtkDialog* dialog, gint response, gpointer) {
         auto* captured = static_cast<EditRequest*>(g_object_get_data(G_OBJECT(dialog), "edit-request"));
@@ -274,16 +296,90 @@ void editSelected(GtkButton*, gpointer data) {
         g_task_run_in_thread(task, editWorker);
         g_object_unref(task);
     }), nullptr);
+    updateActions(state.get());
     gtk_widget_show_all(state->editor);
+}
+struct RemoveRequest {
+    GalleryPtr gallery;
+    std::string path;
+    std::int64_t id;
+    std::optional<RemovedBookmark> restore;
+};
+void removeWorker(GTask* task, gpointer, gpointer data, GCancellable*) {
+    auto* request = static_cast<RemoveRequest*>(data);
+    try {
+        Database database(request->path);
+        LibraryRepository library(database);
+        auto removed = std::make_unique<RemovedBookmark>();
+        if (request->restore) library.restoreBookmark(*request->restore);
+        else *removed = library.removeBookmark(request->id);
+        g_task_return_pointer(task, removed.release(), [](gpointer data) { delete static_cast<RemovedBookmark*>(data); });
+    } catch (const std::exception& error) {
+        g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s", error.what());
+    }
+}
+void removeReady(GObject*, GAsyncResult* result, gpointer) {
+    auto* task = G_TASK(result);
+    auto* request = static_cast<RemoveRequest*>(g_task_get_task_data(task));
+    auto state = request->gallery;
+    GError* error = nullptr;
+    std::unique_ptr<RemovedBookmark> removed(static_cast<RemovedBookmark*>(g_task_propagate_pointer(task, &error)));
+    state->changing = false;
+    if (!state->closed) {
+        if (error) gtk_label_set_text(GTK_LABEL(state->actionStatus), error->message);
+        else {
+            if (request->restore) {
+                state->removed.reset();
+                gtk_label_set_text(GTK_LABEL(state->actionStatus), "Bookmark restored.");
+            } else {
+                state->removed = std::move(*removed);
+                const auto& video = state->removed->video;
+                const auto message = "Removed: " + (video.title.empty() ? video.canonicalUrl : video.title) +
+                    ". Undo is available until the next removal or application close.";
+                gtk_label_set_text(GTK_LABEL(state->actionStatus), message.c_str());
+            }
+            if (state->debounce) { g_source_remove(state->debounce); state->debounce = 0; }
+            loadPage(state);
+        }
+        updateActions(state.get());
+    }
+    g_clear_error(&error);
+}
+void changeBookmark(GtkButton* button, gpointer data) {
+    auto state = shared(static_cast<Gallery*>(data));
+    if (state->changing || state->editor) return;
+    const bool undo = GTK_WIDGET(button) == state->undo;
+    std::int64_t id = 0;
+    if (undo) { if (!state->removed) return; }
+    else {
+        if (state->loading) return;
+        GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(state->flow));
+        if (!selected) return;
+        const int index = gtk_flow_box_child_get_index(GTK_FLOW_BOX_CHILD(selected->data));
+        g_list_free(selected);
+        if (index < 0 || static_cast<std::size_t>(index) >= state->page.items.size()) return;
+        id = state->page.items[index].id;
+    }
+    state->changing = true;
+    updateActions(state.get());
+    gtk_label_set_text(GTK_LABEL(state->actionStatus), undo ? "Restoring bookmark…" : "Removing bookmark…");
+    auto* request = new RemoveRequest{state,
+        (std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db").string(),
+        id, undo ? state->removed : std::nullopt};
+    // Initiated mutations finish independently of navigation/query cancellation.
+    auto* task = g_task_new(nullptr, nullptr, removeReady, nullptr);
+    g_task_set_task_data(task, request, [](gpointer data) { delete static_cast<RemoveRequest*>(data); });
+    g_task_run_in_thread(task, removeWorker);
+    g_object_unref(task);
 }
 void selectionChanged(GtkFlowBox* flow, gpointer data) {
     auto* state = static_cast<Gallery*>(data);
-    gtk_widget_set_sensitive(state->edit, FALSE);
+    if (state->closed) return;
+    updateActions(state);
     GList* selected = gtk_flow_box_get_selected_children(flow);
     if (selected) {
         const int index = gtk_flow_box_child_get_index(GTK_FLOW_BOX_CHILD(selected->data));
         if (index >= 0 && static_cast<std::size_t>(index) < state->page.items.size()) {
-            gtk_widget_set_sensitive(state->edit, TRUE);
             const auto& video = state->page.items[index];
             gtk_label_set_text(GTK_LABEL(state->selection),video.canonicalUrl.c_str());
             if (state->discover) gtk_widget_set_sensitive(state->discover, TRUE);
@@ -330,8 +426,26 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     state->edit = gtk_button_new_with_label("Edit selected");
     gtk_widget_set_name(state->edit, "library-edit");
     gtk_widget_set_sensitive(state->edit, FALSE);
-    gtk_box_pack_start(GTK_BOX(state->root), state->edit, FALSE, FALSE, 0);
     g_signal_connect(state->edit, "clicked", G_CALLBACK(editSelected), state.get());
+    auto* removalActions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_pack_start(GTK_BOX(removalActions), state->edit, FALSE, FALSE, 0);
+    state->remove = gtk_button_new_with_label("Remove selected");
+    state->undo = gtk_button_new_with_label("Undo removal");
+    gtk_widget_set_name(state->remove, "library-remove");
+    gtk_widget_set_name(state->undo, "library-undo");
+    gtk_widget_set_sensitive(state->remove, FALSE);
+    gtk_widget_set_sensitive(state->undo, FALSE);
+    for (auto* button : {state->remove, state->undo}) {
+        gtk_box_pack_start(GTK_BOX(removalActions), button, FALSE, FALSE, 0);
+        g_signal_connect(button, "clicked", G_CALLBACK(changeBookmark), state.get());
+    }
+    gtk_box_pack_start(GTK_BOX(state->root), removalActions, FALSE, FALSE, 0);
+    state->actionStatus = gtk_label_new("");
+    gtk_widget_set_name(state->actionStatus, "library-action-status");
+    gtk_label_set_line_wrap(GTK_LABEL(state->actionStatus), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(state->actionStatus), 80);
+    gtk_label_set_ellipsize(GTK_LABEL(state->actionStatus), PANGO_ELLIPSIZE_END);
+    gtk_box_pack_start(GTK_BOX(state->root), state->actionStatus, FALSE, FALSE, 0);
     if (state->openPage) {
         state->discover = gtk_button_new_with_label("Discover & Play selected");
         gtk_widget_set_name(state->discover, "library-discover");
