@@ -118,6 +118,64 @@ int main() {
             check(lastPage.total == 10000 && lastPage.items.size() == 16);
             check(library.page("Video",streamgallery::VideoSort::Oldest,0).total == 10000);
         }
+        const auto tagsPath = path.parent_path() / "tags.db";
+        {
+            streamgallery::Database db(tagsPath.string());
+            streamgallery::LibraryRepository library(db);
+            std::vector<std::int64_t> ids;
+            for (int index = 0; index < 30; ++index) {
+                auto video = library.bookmark("https://example.com/tagged/" + std::to_string(index),
+                    "Tagged " + std::to_string(index));
+                ids.push_back(video.id);
+                library.updateBookmark(video.id, video.title, "Findable description", {" Music ", "Music", "Live, acoustic", "संगीत"});
+            }
+            auto untagged = library.bookmark("https://example.com/untagged", "No assignment");
+            auto tags = library.videoTags(ids.front());
+            check(tags.size() == 3);
+            check(library.createTag(" Music ").id == library.createTag("Music").id);
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "Music").total == 30);
+            auto last = library.page("Findable", streamgallery::VideoSort::Oldest, 24, 24, " Music ");
+            check(last.total == 30 && last.items.size() == 6 && last.items.front().id == ids[24]);
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 1, "Music").items[0].id == ids.back());
+            check(library.page("", streamgallery::VideoSort::Title, 0, 1, "Music").items[0].title == "Tagged 0");
+            check(library.page("missing", streamgallery::VideoSort::Newest, 0, 24, "Music").total == 0);
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "music").total == 0);
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "संगीत").total == 30);
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "Live, acoustic").total == 30);
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "' OR 1=1 --").total == 0);
+            check(library.page("", streamgallery::VideoSort::Newest, 0).total == 31);
+            library.updateBookmark(ids.front(), "Edited tags", "Updated description", {"Music", "Other"});
+            check(library.videoTags(ids.front()).size() == 2);
+            check(library.page("Edited", streamgallery::VideoSort::Title, 0, 24, "Live, acoustic").total == 0);
+            check(library.page("Updated", streamgallery::VideoSort::Title, 0, 24, "Other").total == 1);
+            bool rejected = false;
+            try { library.updateBookmark(ids.front(), "Must roll back", "", {"Rolled back tag", "   "}); }
+            catch (const std::invalid_argument&) { rejected = true; }
+            check(rejected && scalar(db,"SELECT count(*) FROM tags WHERE name='Rolled back tag'") == 0);
+            check(library.page("Updated", streamgallery::VideoSort::Newest, 0, 24, "Other").total == 1);
+            check(library.videoTags(ids.front()).size() == 2);
+            rejected = false;
+            try { library.updateBookmark(99999, "Missing", "", {"Missing tag"}); }
+            catch (const std::exception&) { rejected = true; }
+            check(rejected && scalar(db,"SELECT count(*) FROM tags WHERE name='Missing tag'") == 0);
+            auto removed = library.removeBookmark(ids.front());
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "Other").total == 0);
+            library.restoreBookmark(removed);
+            check(library.page("Updated", streamgallery::VideoSort::Newest, 0, 24, "Other").total == 1);
+            library.updateBookmark(untagged.id, "No assignment", "", {});
+        }
+        {
+            streamgallery::Database db(tagsPath.string());
+            streamgallery::LibraryRepository library(db);
+            auto page = library.page("Updated", streamgallery::VideoSort::Newest, 0, 24, "Other");
+            check(page.total == 1 && page.items[0].tags.size() == 2);
+            auto duplicate = library.bookmarkWithStatus(page.items[0].canonicalUrl, "Replacement");
+            check(!duplicate.created && duplicate.video.tags == page.items[0].tags);
+            library.updateBookmark(page.items[0].id, "Edited tags", "Updated description", {});
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "Other").total == 0);
+            check(library.videoTags(page.items[0].id).empty());
+            check(library.videos().size() == 31);
+        }
         const auto removalPath = path.parent_path() / "removal.db";
         streamgallery::RemovedBookmark snapshot;
         {

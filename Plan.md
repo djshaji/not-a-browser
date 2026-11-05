@@ -12,8 +12,8 @@ until implemented and validated.
 | Area | Implemented behavior |
 | --- | --- |
 | Application | Native window, resizable sidebar, Library/Discover/Player/Files navigation, session theme switch, and keyboard shortcuts. |
-| Library | SQLite schema version 2, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, and asynchronous selected-bookmark editing, and removal with session Undo. |
-| Gallery | Grid/list views, selection, title/description prefix search, sorting, 24-item pagination, asynchronous queries, and bounded thumbnail caching. |
+| Library | SQLite schema version 2, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, asynchronous selected-bookmark metadata/tag editing, and removal with session Undo. |
+| Gallery | Grid/list views, selection, title/description prefix search, an exact-name single-tag filter, sorting, 24-item pagination, asynchronous queries, and bounded thumbnail caching. |
 | Playback | GtkGLArea/libmpv rendering, local files and direct media URLs, muted startup, seeking, reverse/forward 2×, speed controls, fullscreen, EOF/replay, and mpv resume files. |
 | Files | Native local file chooser, video/all-file filters, playback activation, and session folder/selection restoration across page switches. Browsing remains available without playback. |
 | Video-page discovery | WebKit DOM extraction, title/poster metadata, bounded native HLS verification, stream selection, automatic playback, cancellation, and asynchronous explicit library saves. |
@@ -21,11 +21,12 @@ until implemented and validated.
 | User profiles | Validated JSON listing profiles and a generic HLS override from the XDG config directory, with Reload profiles and built-in fallback. |
 | Validation | Database, thumbnails, adapter profiles, HLS inspection, rendered discovery, listings, UI smoke, and Python fixture-runner tests. |
 
-Folder/tag creation and video relationship APIs exist. Their editing UI
-and tag filtering are not implemented. Removal with one session Undo slot is implemented. The `Video` model and
-repository queries expose descriptions, and metadata updates maintain FTS through
-the existing database triggers. Playback resume currently belongs to
-libmpv; there is no library-level Recent/history workflow.
+Folder creation and video relationship APIs exist, but folder editing UI is not
+implemented. Bookmark metadata/tag editing, tag filtering, and removal with one
+session Undo slot are implemented. The `Video` model and repository queries expose
+descriptions and assigned tags; metadata updates maintain FTS through existing
+triggers. Playback resume currently belongs to libmpv; there is no library-level
+Recent/history workflow.
 
 ## Architecture and boundaries
 
@@ -54,10 +55,9 @@ the current profile and extraction bounds documented in AGENTS.md: 128 KiB per
 file, 64 custom listing profiles, five pages/batches, 120 total cards, and at most
 24 new cards per batch. Site profiles cannot relax native safety limits.
 
-## Next milestone: bookmark management
+## Bookmark management (implemented)
 
-Make saved bookmarks manageable from Library. Deliver the work in small,
-independently usable steps:
+The Library management milestone consists of these implemented slices:
 
 1. **Edit metadata (implemented).** The first slice adds an editor for the selected bookmark's title and
    description. The model/repository read and update descriptions.
@@ -70,15 +70,18 @@ independently usable steps:
    missing relationships fail without partial changes, retaining the snapshot for
    retry. Reuse the original record ID when free; allocate a new ID if occupied,
    which can change newest/oldest ordering. Removal never deletes a media file.
-3. **Assign and filter tags.** Add tag listing and assignment/removal controls,
-   plus a gallery tag filter. Extend repository queries so filters compose with
-   text search, sorting, counts, and pagination. Reset or clamp pages when results
-   shrink. Keep queries and rendered widgets bounded.
+3. **Assign and filter tags (implemented).** The existing editor shows assigned
+   tags one per line. Save creates names and replaces assignments atomically with
+   metadata updates; removing a line unassigns it without deleting the global tag.
+   Trim surrounding spaces, ignore blank lines, and deduplicate repeated names.
+   The gallery's exact-name, case-sensitive tag field composes with text search,
+   sorting, counts, and pagination. Changing filters resets the page, and a save
+   that removes the active tag refreshes the results. Undo restores assignments.
 
-Existing folder/tag APIs, metadata editing, and transactional removal/restoration
-are a starting point; tag enumeration/removal and filtered queries still need
-repository support. Prefer the existing schema where sufficient. Introduce transactional,
-versioned migrations only when storage changes are required.
+These slices use schema version 2 without a migration. Global tag renaming/deletion,
+a tag chooser, and multiple-tag filters remain unimplemented. Keep repository
+queries and rendered gallery pages bounded; introduce transactional, versioned
+migrations only when storage changes are required.
 
 All writes run in database workers. Capture the selected record's identity at
 action time, disable conflicting pending actions, and guard callbacks against
@@ -147,5 +150,5 @@ visible UI changes; and update README.md with actual behavior. Keep this roadmap
 current as milestones land. Do not present planned controls as working features.
 
 Use the build and test commands in README.md and the feature-specific validation
-rules in AGENTS.md. Metadata editing and removal with Undo are implemented; tag assignment/filtering
-is the next proposed development slice within bookmark management.
+rules in AGENTS.md. The bookmark management slices are implemented. Choose the next development
+slice from the following milestones according to the workflow being improved.

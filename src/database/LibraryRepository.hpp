@@ -24,10 +24,13 @@ public:
     Video bookmark(const std::string& url, const std::string& title, const std::string& thumbnailUrl = "");
     BookmarkResult bookmarkWithStatus(const std::string& url, const std::string& title, const std::string& thumbnailUrl = "");
     void updateMetadata(std::int64_t videoId, const std::string& title, const std::string& description);
+    void updateBookmark(std::int64_t videoId, const std::string& title, const std::string& description,
+                        const std::vector<std::string>& tags);
+    std::vector<std::string> videoTags(std::int64_t videoId);
     RemovedBookmark removeBookmark(std::int64_t videoId);
     void restoreBookmark(const RemovedBookmark& removed);
     std::vector<Video> videos();
-    VideoPage page(const std::string& search, VideoSort sort, int offset, int limit = 24);
+    VideoPage page(const std::string& search, VideoSort sort, int offset, int limit = 24, const std::string& tag = "");
     Folder createFolder(const std::string& name, std::int64_t parentId = 0);
     Tag createTag(const std::string& name);
     void addToFolder(std::int64_t videoId, std::int64_t folderId);

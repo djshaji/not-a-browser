@@ -19,6 +19,8 @@ struct Gallery {
     GtkWidget* editor = nullptr;
     GtkWidget* titleEntry = nullptr;
     GtkWidget* descriptionView = nullptr;
+    GtkWidget* tagsView = nullptr;
+    GtkWidget* tagFilter = nullptr;
     GtkWidget* editStatus = nullptr;
     bool saving = false;
     bool changing = false;
@@ -38,7 +40,7 @@ using GalleryPtr = std::shared_ptr<Gallery>;
 struct Query {
     GalleryPtr gallery;
     unsigned generation;
-    std::string path, search;
+    std::string path, search, tag;
     VideoSort sort;
     int offset;
 };
@@ -113,11 +115,15 @@ void render(const GalleryPtr& state) {
     gtk_widget_show_all(state->flow);
     std::string message;
     if (state->page.total == 0) {
+        if (*gtk_entry_get_text(GTK_ENTRY(state->search)) || *gtk_entry_get_text(GTK_ENTRY(state->tagFilter)))
+            message = "No videos found. Clear the search or tag filter, or add bookmarks.";
+        else {
 #ifdef HAVE_DISCOVERY
-        message = "No videos found. Save a page from Discover, or add CLI bookmarks and press Refresh.";
+            message = "No videos found. Save a page from Discover, or add CLI bookmarks and press Refresh.";
 #else
-        message = "No videos found. Add bookmarks with stream-gallery-library, then Refresh.";
+            message = "No videos found. Add bookmarks with stream-gallery-library, then Refresh.";
 #endif
+        }
     }
     else message = std::to_string(state->offset + 1) + "–" + std::to_string(state->offset + state->page.items.size()) +
         " of " + std::to_string(state->page.total) + " videos";
@@ -132,7 +138,7 @@ void queryWorker(GTask* task, gpointer, gpointer data, GCancellable* cancellable
         std::filesystem::create_directories(std::filesystem::path(query->path).parent_path());
         Database database(query->path);
         LibraryRepository library(database);
-        auto result = std::make_unique<VideoPage>(library.page(query->search,query->sort,query->offset,pageSize));
+        auto result = std::make_unique<VideoPage>(library.page(query->search,query->sort,query->offset,pageSize,query->tag));
         if (g_cancellable_is_cancelled(cancellable)) { g_task_return_error_if_cancelled(task); return; }
         g_task_return_pointer(task,result.release(),[](gpointer data) { delete static_cast<VideoPage*>(data); });
     } catch (const std::exception& error) {
@@ -169,6 +175,7 @@ void loadPage(const GalleryPtr& state) {
     auto path = std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db";
     auto* query = new Query{state,state->generation,path.string(),
         gtk_entry_get_text(GTK_ENTRY(state->search)),
+        gtk_entry_get_text(GTK_ENTRY(state->tagFilter)),
         static_cast<VideoSort>(gtk_combo_box_get_active(GTK_COMBO_BOX(state->sort))),state->offset};
     auto* task = g_task_new(nullptr,state->cancellable,queryReady,nullptr);
     g_task_set_task_data(task,query,[](gpointer data) { delete static_cast<Query*>(data); });
@@ -180,6 +187,9 @@ void searchChanged(GtkSearchEntry*, gpointer data) {
     if (state->debounce) g_source_remove(state->debounce);
     state->loading = true;
     updateActions(state);
+    gtk_widget_set_sensitive(state->previous, FALSE);
+    gtk_widget_set_sensitive(state->next, FALSE);
+    gtk_label_set_text(GTK_LABEL(state->status), "Loading library…");
     // Superseded results cannot overwrite the pending search.
     ++state->generation;
     if (state->cancellable) g_cancellable_cancel(state->cancellable);
@@ -194,12 +204,13 @@ struct EditRequest {
     GalleryPtr gallery;
     std::int64_t id;
     std::string path, title, description;
+    std::vector<std::string> tags;
 };
 void editWorker(GTask* task, gpointer, gpointer data, GCancellable*) {
     auto* request = static_cast<EditRequest*>(data);
     try {
         Database database(request->path);
-        LibraryRepository(database).updateMetadata(request->id, request->title, request->description);
+        LibraryRepository(database).updateBookmark(request->id, request->title, request->description, request->tags);
         g_task_return_boolean(task, TRUE);
     } catch (const std::exception& error) {
         g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s", error.what());
@@ -216,6 +227,7 @@ void editReady(GObject*, GAsyncResult* result, gpointer) {
             gtk_label_set_text(GTK_LABEL(state->editStatus), error->message);
             gtk_widget_set_sensitive(state->titleEntry, TRUE);
             gtk_widget_set_sensitive(state->descriptionView, TRUE);
+            gtk_widget_set_sensitive(state->tagsView, TRUE);
             gtk_dialog_set_response_sensitive(GTK_DIALOG(state->editor), GTK_RESPONSE_ACCEPT, TRUE);
         } else {
             gtk_widget_destroy(state->editor);
@@ -240,7 +252,7 @@ void editSelected(GtkButton*, gpointer data) {
         static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
         "Cancel", GTK_RESPONSE_CANCEL, "Save", GTK_RESPONSE_ACCEPT, nullptr);
     gtk_widget_set_name(state->editor, "library-editor");
-    gtk_window_set_default_size(GTK_WINDOW(state->editor), 480, 320);
+    gtk_window_set_default_size(GTK_WINDOW(state->editor), 480, 480);
     auto* content = gtk_dialog_get_content_area(GTK_DIALOG(state->editor));
     gtk_container_set_border_width(GTK_CONTAINER(content), 12);
     gtk_box_set_spacing(GTK_BOX(content), 8);
@@ -257,15 +269,31 @@ void editSelected(GtkButton*, gpointer data) {
     atk_object_set_name(gtk_widget_get_accessible(state->descriptionView), "Bookmark description");
     auto* scroll = gtk_scrolled_window_new(nullptr, nullptr);
     gtk_container_add(GTK_CONTAINER(scroll), state->descriptionView);
+    auto* tagsLabel = gtk_label_new("Tags (one per line; clear a line to unassign)");
+    state->tagsView = gtk_text_view_new();
+    gtk_widget_set_name(state->tagsView, "library-edit-tags");
+    atk_object_set_name(gtk_widget_get_accessible(state->tagsView), "Bookmark tags, one per line");
+    std::string tagText;
+    for (const auto& tag : video.tags) {
+        if (!tagText.empty()) tagText += '\n';
+        tagText += tag;
+    }
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(state->tagsView)), tagText.c_str(), -1);
+    auto* tagsScroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tagsScroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_size_request(tagsScroll, -1, 96);
+    gtk_container_add(GTK_CONTAINER(tagsScroll), state->tagsView);
     state->editStatus = gtk_label_new("");
     gtk_label_set_line_wrap(GTK_LABEL(state->editStatus), TRUE);
     for (auto* widget : {titleLabel, state->titleEntry, descriptionLabel})
         gtk_box_pack_start(GTK_BOX(content), widget, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(content), scroll, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(content), tagsLabel, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), tagsScroll, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(content), state->editStatus, FALSE, FALSE, 0);
     g_object_set_data_full(G_OBJECT(state->editor), "edit-request",
         new EditRequest{state, video.id,
-            (std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db").string(), {}, {}},
+            (std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db").string(), {}, {}, {}},
         [](gpointer request) { delete static_cast<EditRequest*>(request); });
     g_signal_connect(state->editor, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer data) {
         auto* state = static_cast<Gallery*>(data);
@@ -285,9 +313,19 @@ void editSelected(GtkButton*, gpointer data) {
         gtk_text_buffer_get_bounds(buffer, &start, &end);
         gchar* description = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
         request->description = description; g_free(description);
+        auto* tagBuffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(state->tagsView));
+        gtk_text_buffer_get_bounds(tagBuffer, &start, &end);
+        gchar* tagText = gtk_text_buffer_get_text(tagBuffer, &start, &end, FALSE);
+        gchar** lines = g_strsplit(tagText, "\n", -1);
+        for (int index = 0; lines[index]; ++index) {
+            g_strstrip(lines[index]);
+            if (*lines[index]) request->tags.emplace_back(lines[index]);
+        }
+        g_strfreev(lines); g_free(tagText);
         state->saving = true;
         gtk_widget_set_sensitive(state->titleEntry, FALSE);
         gtk_widget_set_sensitive(state->descriptionView, FALSE);
+        gtk_widget_set_sensitive(state->tagsView, FALSE);
         gtk_dialog_set_response_sensitive(dialog, GTK_RESPONSE_ACCEPT, FALSE);
         gtk_label_set_text(GTK_LABEL(state->editStatus), "Saving…");
         // Writes finish independently of gallery query cancellation or destruction.
@@ -405,9 +443,19 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     for (const char* label : {"Grid", "List"}) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state->mode),label);
     gtk_combo_box_set_active(GTK_COMBO_BOX(state->mode),0);
     state->refresh = gtk_button_new_with_label("Refresh");
+    gtk_widget_set_name(state->refresh, "library-refresh");
     gtk_box_pack_start(GTK_BOX(controls),state->search,TRUE,TRUE,0);
     for (auto* widget : {state->sort,state->mode,state->refresh}) gtk_box_pack_start(GTK_BOX(controls),widget,FALSE,FALSE,0);
     gtk_box_pack_start(GTK_BOX(state->root),controls,FALSE,FALSE,0);
+    auto* filterRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    auto* tagLabel = gtk_label_new("Tag");
+    state->tagFilter = gtk_search_entry_new();
+    gtk_widget_set_name(state->tagFilter, "library-tag-filter");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(state->tagFilter), "Exact tag name (empty shows all)");
+    atk_object_set_name(gtk_widget_get_accessible(state->tagFilter), "Filter by exact tag name");
+    gtk_box_pack_start(GTK_BOX(filterRow), tagLabel, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(filterRow), state->tagFilter, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(state->root), filterRow, FALSE, FALSE, 0);
     auto* scroll = gtk_scrolled_window_new(nullptr,nullptr);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);
     state->flow = gtk_flow_box_new();
@@ -468,7 +516,8 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     gtk_box_pack_start(GTK_BOX(paging),state->previous,FALSE,FALSE,0);
     gtk_box_pack_end(GTK_BOX(paging),state->next,FALSE,FALSE,0);
     gtk_box_pack_start(GTK_BOX(state->root),paging,FALSE,FALSE,0);
-    g_signal_connect(state->search,"search-changed",G_CALLBACK(searchChanged),state.get());
+    g_signal_connect(state->search,"changed",G_CALLBACK(searchChanged),state.get());
+    g_signal_connect(state->tagFilter,"changed",G_CALLBACK(searchChanged),state.get());
     g_signal_connect(state->flow,"selected-children-changed",G_CALLBACK(selectionChanged),state.get());
     g_signal_connect(state->sort,"changed",G_CALLBACK(+[](GtkComboBox*, gpointer data) {
         auto* state = static_cast<Gallery*>(data); state->offset = 0; loadPage(shared(state));

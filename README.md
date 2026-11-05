@@ -8,7 +8,8 @@ The current build provides:
 
 - Native window, resizable sidebar, Library/Discover/Player/Files navigation, and a session-only light/dark theme switch.
 - SQLite bookmarks, canonical URL deduplication, transactional migrations, and full-text indexing.
-- Grid/list gallery with selection, newest/oldest/title sorting, prefix search, and 24-item pagination.
+- Grid/list gallery with selection, newest/oldest/title sorting, prefix search, an exact-name tag filter, and 24-item pagination.
+- Bookmark title/description editing and tag assignment, with transactional saves and removal/Undo.
 - Background database queries and thumbnail loading, cancellation of obsolete work, and a bounded thumbnail cache.
 - A command-line bookmark tool, plus database, thumbnail, player, DOM extraction, and UI tests.
 - Native libmpv playback and WebKitGTK webpage loading with DOM-based HLS extraction.
@@ -17,7 +18,7 @@ The current build provides:
 - Listing-card discovery with two sample JSON profiles, per-video Play/Save actions, and bounded next-link/load-more pagination.
 - User-provided listing profiles and a custom HLS discovery profile loaded from `~/.config/notabrowser/`, without rebuilding.
 
-Folder/tag creation and video relationships have repository APIs; their editing UI is planned. Selected bookmarks support title/description editing. Selected bookmarks can be removed with Undo. Tag assignment and filtering remain planned. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. CLI bookmarks record the supplied metadata; Discover can save a page's extracted title and poster. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
+Folder creation and video relationships have repository APIs; folder editing UI is planned. Selected bookmarks support title/description and tag editing, plus removal with Undo. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. CLI bookmarks record the supplied metadata; Discover can save a page's extracted title and poster. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
 
 ## Requirements
 
@@ -108,9 +109,9 @@ URL normalization handles scheme/host casing, default ports, empty paths, and fr
 
 1. Add bookmarks through the CLI, then open Library and press **Refresh**.
 2. Choose **Grid** or **List**, and sort by newest, oldest, or title.
-3. Enter search terms to match title/description prefixes. Multiple terms must all match; FTS operators and folder/tag filters are not exposed.
+3. Enter search terms to match title/description prefixes. Multiple terms must all match; FTS operators and folder filters are not exposed. Enter one exact, case-sensitive tag name in **Tag** to combine it with the text search. Surrounding spaces are trimmed; clear Tag to include every bookmark. Tag changes reset pagination.
 4. Use **Previous** and **Next** to browse 24 records per page.
-5. Select a card to display its page URL. Choose **Edit selected** to change its title and description, then **Save**. Changes persist in the background and refresh the gallery and search results. The page URL and thumbnail stay unchanged; Cancel discards unsaved edits. An initiated save continues if you switch pages. Errors stay in the editor so you can retry.
+5. Select a card to display its page URL. Choose **Edit selected** to change its title, description, and tags, then **Save**. Enter tags one per line; saving creates new names and assigns them. Blank lines are ignored and repeated names are deduplicated after trimming surrounding spaces. Spaces and commas inside a name are literal. Remove a line to unassign that tag, or clear the field to remove all assignments. This leaves the tag available for other bookmarks. Metadata and tag changes save together in one database transaction in the background and refresh the gallery and search results. The page URL and thumbnail stay unchanged; Cancel discards unsaved edits. An initiated save continues if you switch pages. Errors stay in the editor so you can retry.
 6. Choose **Remove selected** to remove a bookmark from Library. **Undo removal** restores its title, description, thumbnail, saved timestamp, and folder/tag relationships. One Undo is kept for the current session, until another removal succeeds or the application closes. Switching pages, searching, and Refresh retain it. Removing a bookmark does not delete media files.
 7. If the same URL was saved again, Undo reports a conflict and preserves the existing bookmark and the Undo snapshot. Missing folders/tags also prevent restoration; failures leave the database unchanged and Undo available. The original record ID is reused when free; if another bookmark has reused it, restoration allocates a new ID and its position in newest/oldest sorting may change.
 8. Choose **Discover & Play selected** to load the selected page in WebKit and look for a playable HLS stream.
@@ -181,13 +182,13 @@ With the library, player, and discovery enabled, seven C++ tests are registered:
 
 | Test | Coverage |
 | --- | --- |
-| `database` | Persistence, metadata editing and FTS updates, transactional removal/restoration, relationship rollback, duplicate and reused-ID conflicts, missing-record errors, migrations, atomic new/duplicate bookmark reporting, metadata preservation, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
+| `database` | Persistence, atomic metadata/tag editing, tag normalization/deduplication, combined search/tag filtering and pagination, FTS updates, transactional removal/restoration, relationship rollback, duplicate and reused-ID conflicts, missing-record errors, migrations, atomic new/duplicate bookmark reporting, metadata preservation, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
 | `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
 | `adapter-profiles` | Config-directory discovery, filename ordering, listing pagination types, HLS override loading, and rejection of invalid, unsupported, and oversized profiles. |
 | `hls-discovery` | Master/media classification, reference resolution, local HTTP redirects, invalid/oversized responses, request headers, and cancellation without a display. |
 | `discovery` | Rendered DOM/title/poster extraction, verified playlists, cancellation, asynchronous saving/duplicates, metadata snapshots during navigation, save failure/retry, automatic gallery refresh, persisted library reopening, and local webpage-to-HLS playback when ffmpeg is installed. |
 | `listings` | Config-loaded profile selection, two local listing fixtures, relative links/posters, missing titles, invalid URLs, per-card Play/Save, deduplication, next-link loops, page limits, dynamic button pagination, delayed DOM insertion, Stop/navigation, and destruction during extraction. |
-| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, metadata editing and removal/Undo across page navigation, filtered removal, pagination updates, Undo conflicts/retry, destruction during removal, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, transport seeking and reverse/forward speed state, local file playback and folder/selection restoration, and quit cleanup. |
+| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, metadata/tag editing, cancelled edits, tag persistence across window recreation, filter changes, tag unassignment, and removal/Undo across page navigation, filtered removal, pagination updates, Undo conflicts/retry, destruction during removal, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, transport seeking and reverse/forward speed state, local file playback and folder/selection restoration, and quit cleanup. |
 
 When Python 3 is available, CTest also registers `adapter-runner` for the local
 generic JSON adapter runner. See [the adapter example](examples/adapters/README.md)
@@ -197,7 +198,7 @@ UI tests use Adwaita and treat GTK warnings as failures. CMake runs them through
 
 For manual validation:
 
-1. Add bookmarks, search, switch views, resize the window/sidebar, and toggle the theme. Restart and confirm bookmarks persist.
+1. Add bookmarks, search, switch views, resize the window/sidebar, and toggle the theme. Edit a bookmark and assign tags, filter by one tag with text search, then remove an assignment and check the filtered result disappears. Remove/Undo a bookmark and confirm tags return. Restart and confirm edits and tags persist.
 2. Add more than 24 records to exercise pagination and supply an image URL to check thumbnails.
 3. Open a local video. Check muted startup, volume, ±5-minute seeking, reverse/forward 2× toggles, speed selection, fullscreen, EOF retention, and replay.
 4. Use **Discover → Load & Play** with a page exposing an `.m3u8` URL in its DOM. Check automatic native playback and **Stop loading**.
@@ -275,7 +276,7 @@ user files requires **Reload profiles** in the relevant tab, but no restart or r
 
 ## Roadmap and contribution
 
-Library supports title/description editing and removal with a session Undo slot. Next is tag assignment/filtering while preserving asynchronous database access, search, sorting, and pagination.
+Library supports title/description and tag editing, an exact-name single-tag filter, and removal with a session Undo slot. Global tag renaming/deletion, a tag chooser, multiple-tag filters, and folder organization UI remain future work.
 
 Following milestones are a profile for a regularly used website, playback history and Recent, folder organization, richer metadata, discovery expansion, and release hardening. See [Plan.md](Plan.md) for scope, acceptance criteria, and validation expectations.
 
