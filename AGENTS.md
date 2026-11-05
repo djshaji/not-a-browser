@@ -2,10 +2,10 @@
 
 ## Project Structure & Module Organization
 
-Stream Gallery is a native C++17/GTK3 Linux application with a SQLite gallery, libmpv playback, and WebKitGTK DOM-based HLS discovery. `README.md` documents current behavior; `Plan.md` describes the broader roadmap, including features not yet implemented.
+Stream Gallery is a native C++17/GTK3 Linux application with a SQLite gallery, libmpv playback, and WebKitGTK DOM-based HLS discovery. `README.md` documents current behavior; `Plan.md` tracks the implemented baseline, the next bookmark-management milestone, and later work. Treat planned features as unimplemented until verified in code.
 
 - `src/app/`: startup and application lifecycle.
-- `src/ui/`: main window, grid/list gallery, libmpv player, and WebKit page/listing browsers.
+- `src/ui/`: main window, grid/list gallery, libmpv player, WebKit page/listing browsers, and the native local file browser (`FilesView`).
 - `src/database/`: migrations, repositories, and bookmark CLI.
 - `src/models/`: shared data types.
 - `src/services/`: thumbnail loading/caching, bounded HLS fetching/inspection, asynchronous bookmark saves, and user profile loading (`AdapterProfiles`).
@@ -28,7 +28,7 @@ ctest --test-dir build --output-on-failure
 ./build/stream-gallery-library list
 ```
 
-Press Refresh to display externally added bookmarks. Library, player, discovery, and testing options default to `ON`. Use `-DBUILD_PLAYER=OFF -DBUILD_DISCOVERY=OFF` for a gallery-only build; also set `-DBUILD_LIBRARY=OFF` for the GTK shell alone. Discovery requires the player. Keep generated files in `build/`.
+Press Refresh to display externally added bookmarks. Library, player, discovery, and testing options default to `ON`. Use `-DBUILD_PLAYER=OFF -DBUILD_DISCOVERY=OFF` for a gallery-only build; also set `-DBUILD_LIBRARY=OFF` for the GTK shell with local file browsing and playback disabled. Discovery requires the player. Keep generated files in `build/`.
 
 ## Coding Style & Architecture
 
@@ -37,6 +37,8 @@ Use four-space indentation, `PascalCase` class/file names, `.hpp` headers, and `
 Use RAII for ownership. Keep GTK access on the main thread and database/network/image work in background tasks. Cancel superseded jobs and ignore stale callbacks. Bound gallery queries and caches. Preserve existing data through transactional, versioned migrations.
 
 Preserve player lifecycle handling, GtkGLArea/OpenGL ownership, and asynchronous libmpv event delivery. Keep the centered transport order (−5 min, reverse 2×, Play/Pause, forward 2×, +5 min), update icons/accessibility labels from playback state, and synchronize speed/direction controls with observed libmpv properties. Discovery embeds `examples/adapters/generic-hls.json`, extracts structured DOM results, and verifies HLS in workers before playback. It does not use yt-dlp or network interception. Cancel loading/extraction/verification on navigation and destruction, and reject stale callbacks. Resolve playlist references against the final response URL after redirects.
+
+Keep Files local-only and route regular-file activation through the existing player. Preserve its folder and selection across page switches and playback within the session. The file chooser remains available without `BUILD_PLAYER`, with its Play action disabled. Keep playback shortcuts out of Files so chooser navigation works normally; preserve Alt+1–4 page navigation, text-entry/WebKit typing guards, Escape fullscreen exit, and Q quit behavior. Initialize `LC_NUMERIC` to `C` before creating the player or gallery workers so libmpv works under desktop locales with non-dot decimal separators.
 
 Explicit library saves run in database workers using a snapshot of page metadata. Finish an initiated save across navigation, refresh the gallery on success, and suppress messages for stale pages or destroyed widgets. Use atomic new/duplicate reporting and preserve existing bookmark metadata.
 
@@ -48,7 +50,7 @@ Built-in adapter profiles are embedded at build time; rebuild after changing bun
 
 Tests use GLib assertions or exception-based checks; no external framework or coverage threshold is configured. Name files `*_tests.cpp`. CTest registers `database`, `thumbnails`, `hls-discovery`, `discovery`, `listings`, and `ui-smoke` according to enabled features, plus `adapter-profiles` when discovery is enabled and `adapter-runner` when Python 3 is available. Cover persistence, migrations, deduplication, FTS, pagination, caching, HLS verification, DOM extraction/cancellation, playback lifecycle, shortcuts, and asynchronous UI behavior. Isolate test data with temporary XDG directories and prefer local fixtures/HTTP servers over live websites.
 
-UI/discovery tests use Adwaita with fatal warnings and automatically use `xvfb-run` when installed. Missing displays or restricted image codecs can cause skips; report them separately from passing tests. Discovery's local HLS playback subcheck requires `ffmpeg`. Manually verify visible UI changes; playback needs a working OpenGL session. Check muted startup, seeking, fullscreen restoration, EOF/replay, shortcuts, and discovery cancellation when relevant.
+UI/discovery tests use Adwaita with fatal warnings and automatically use `xvfb-run` when installed. Missing displays or restricted image codecs can cause skips; report them separately from passing tests. Discovery's local HLS playback subcheck requires `ffmpeg`. Manually verify visible UI changes; playback needs a working OpenGL session. Check muted startup, ±5-minute seeking, reverse/forward 2× toggles, speed synchronization, fullscreen restoration, EOF/replay, shortcuts, and discovery cancellation when relevant. For Files changes, verify local file activation and folder/selection restoration after playback and page switches; run `ctest --test-dir build -R ui-smoke --output-on-failure`. Keep file chooser navigation and builds without the player working.
 
 For profile-loader changes, run `ctest --test-dir build -R 'adapter-profiles|discovery|listings' --output-on-failure`. Cover isolated XDG config paths, missing directories, valid profiles, invalid/oversized input, ordering, fallback, and extraction through a selected custom listing profile.
 
@@ -61,3 +63,11 @@ Use concise, imperative commit subjects, following recent history. PRs should de
 ## Configuration & Future Work
 
 Library/browser data and caches follow XDG data/cache directories under `stream-gallery/`; playback resume files use `$XDG_STATE_HOME/stream-gallery/watch-later/`. Never commit personal databases, credentials, or cookies. Validate URLs and pass subprocess arguments without shell interpolation. Browser cookies remain in WebKit's store and are not copied to libmpv; playback receives the page referrer and user agent. Keep durable bookmark page URLs separate from temporary playback URLs. Production website profiles, richer metadata, and infinite scrolling remain planned.
+
+## Next Planned Milestone: Bookmark Management
+
+The next proposed work is selected-bookmark title/description editing, removal with Undo, and tag assignment/filtering. These are roadmap items, not current UI features. Folder/tag creation and relationship APIs exist; metadata editing, deletion/restoration, tag enumeration/removal, and filtered queries still need repository support. The database has a description column, but the current `Video` model does not expose it.
+
+When implementing this milestone, keep canonical URLs and record identity stable during edits, update FTS consistently, and preserve metadata on duplicate imports. Define Undo lifetime and conflict behavior; restore metadata and folder/tag relationships transactionally. Bookmark removal must never remove local media files. Compose tag filters with search, sorting, counts, and bounded pagination, resetting or clamping pages when results shrink.
+
+Run writes in database workers, capture record identity at action time, and reject stale UI callbacks after selection changes or destruction. Cover persistence, FTS edits, removal/Undo relationships and conflicts, filter pagination, and asynchronous lifetimes in database/UI tests. Manually verify visible controls. Follow Plan.md for milestone acceptance criteria and update README.md only as functionality becomes available.

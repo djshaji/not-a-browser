@@ -1,22 +1,23 @@
 # Stream Gallery
 
-A native Linux video browser, bookmark library, and media player built with C++17 and GTK3. Browse webpages through WebKitGTK, extract HLS streams from their rendered DOM, and play them through libmpv. Development follows [Plan.md](Plan.md).
+A native Linux video browser, bookmark library, and media player built with C++17 and GTK3. Browse webpages through WebKitGTK, extract HLS streams from their rendered DOM, and play them through libmpv. See [Plan.md](Plan.md) for the implementation roadmap and next milestones.
 
 ## Current status
 
 The current build provides:
 
-- Native window, resizable sidebar, Library/Discover/Player navigation, and a session-only light/dark theme switch.
+- Native window, resizable sidebar, Library/Discover/Player/Files navigation, and a session-only light/dark theme switch.
 - SQLite bookmarks, canonical URL deduplication, transactional migrations, and full-text indexing.
 - Grid/list gallery with selection, newest/oldest/title sorting, prefix search, and 24-item pagination.
 - Background database queries and thumbnail loading, cancellation of obsolete work, and a bounded thumbnail cache.
 - A command-line bookmark tool, plus database, thumbnail, player, DOM extraction, and UI tests.
 - Native libmpv playback and WebKitGTK webpage loading with DOM-based HLS extraction.
+- Local folder browsing with video/all-file filters and folder/selection restoration when switching pages.
 - Save discovered pages to Library with their title and poster, duplicate detection, and automatic gallery refresh.
 - Listing-card discovery with two sample JSON profiles, per-video Play/Save actions, and bounded next-link/load-more pagination.
 - User-provided listing profiles and a custom HLS discovery profile loaded from `~/.config/notabrowser/`, without rebuilding.
 
-Folder hierarchies, tags, and video relationships have repository APIs; their editing UI is planned. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. CLI bookmarks record the supplied metadata; Discover can save a page's extracted title and poster. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
+Folder/tag creation and video relationships have repository APIs; their editing UI is planned. Bookmark title/description editing, removal with Undo, and tag filtering are also planned and are not currently available. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. CLI bookmarks record the supplied metadata; Discover can save a page's extracted title and poster. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
 
 ## Requirements
 
@@ -52,7 +53,7 @@ cmake --build build
 ./build/stream-gallery
 ```
 
-GTK Builder XML, CSS, and the HLS extraction script are embedded in the executable, so it can run from any working directory. The commands above assume the repository root.
+GTK Builder XML, CSS, adapter profiles, and the HLS/listing extraction scripts are embedded in the executable, so it can run from any working directory. The commands above assume the repository root.
 
 | CMake option | Default | Behavior |
 | --- | --- | --- |
@@ -68,7 +69,7 @@ cmake -S . -B build -DBUILD_PLAYER=OFF -DBUILD_DISCOVERY=OFF
 cmake --build build
 ```
 
-For the GTK shell only, also set `-DBUILD_LIBRARY=OFF`. Re-enable the desired options when returning to the full build.
+For the GTK shell with local file browsing but no playback, also set `-DBUILD_LIBRARY=OFF`. Re-enable the desired options when returning to the full build.
 
 In builds without discovery, missing libsoup development files cause configuration to report that only local `file://` thumbnails and existing cache entries are supported. After installing libsoup, rerun configuration and rebuild to enable HTTP thumbnails.
 
@@ -113,6 +114,18 @@ URL normalization handles scheme/host casing, default ports, empty paths, and fr
 
 Thumbnail decoding and database access run outside the GTK main thread. Only the current page's images are requested. Thumbnails are scaled within 192 × 108 pixels, with a disk cache capped at 256 entries. Downloads have a 10-second session timeout and a 5 MiB input limit. Missing or invalid images retain a generic video icon.
 
+## Browse local files
+
+Open **Files** (or press **Alt+4**) to browse local folders with the native GTK
+file chooser. It starts in your home directory and provides folder shortcuts,
+a **Videos** filter, and an **All files** filter. Select a file and choose
+**Play selected video**, or double-click it, to open it in Player. Activating a
+folder navigates into it. The current folder and selected file are retained when
+switching pages, including when returning from playback, for the current session.
+
+Files remains available in builds without the player, with playback disabled.
+Browsing local files does not add them to the bookmark library.
+
 ## Playback
 
 Open **Player**, then choose **Open file…**, or enter a direct HTTP/HTTPS media URL and choose **Open URL**. libmpv handles local files, ordinary MP4 URLs, and HLS streams. For a webpage URL, use **Discover → Load & Play** or the selected bookmark's discovery action.
@@ -127,7 +140,7 @@ libmpv saves resume state when replacing a playing file or closing the applicati
 
 ## Keyboard shortcuts
 
-Single-key shortcuts work throughout the main window and in fullscreen when focus is outside text fields and embedded web pages. Text fields and web pages receive their normal typing and navigation keys, including Q. Alt+1–4 page shortcuts remain available while typing. Shift variants are accepted; other Ctrl/Alt/Super combinations retain their normal behavior.
+Single-key shortcuts work throughout the main window and in fullscreen when focus is outside text fields and embedded web pages. Text fields and web pages receive their normal typing and navigation keys, including Q. On Files, playback shortcuts are disabled so the file chooser keeps its normal navigation keys; Escape and page shortcuts remain available, and Q still quits when focus is outside a text field. Alt+1–4 page shortcuts remain available while typing. Shift variants are accepted; other Ctrl/Alt/Super combinations retain their normal behavior.
 
 | Key | Action |
 | --- | --- |
@@ -171,7 +184,7 @@ With the library, player, and discovery enabled, seven C++ tests are registered:
 | `hls-discovery` | Master/media classification, reference resolution, local HTTP redirects, invalid/oversized responses, request headers, and cancellation without a display. |
 | `discovery` | Rendered DOM/title/poster extraction, verified playlists, cancellation, asynchronous saving/duplicates, metadata snapshots during navigation, save failure/retry, automatic gallery refresh, persisted library reopening, and local webpage-to-HLS playback when ffmpeg is installed. |
 | `listings` | Config-loaded profile selection, two local listing fixtures, relative links/posters, missing titles, invalid URLs, per-card Play/Save, deduplication, next-link loops, page limits, dynamic button pagination, delayed DOM insertion, Stop/navigation, and destruction during extraction. |
-| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, and quit cleanup. |
+| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, transport seeking and reverse/forward speed state, local file playback and folder/selection restoration, and quit cleanup. |
 
 When Python 3 is available, CTest also registers `adapter-runner` for the local
 generic JSON adapter runner. See [the adapter example](examples/adapters/README.md)
@@ -183,10 +196,11 @@ For manual validation:
 
 1. Add bookmarks, search, switch views, resize the window/sidebar, and toggle the theme. Restart and confirm bookmarks persist.
 2. Add more than 24 records to exercise pagination and supply an image URL to check thumbnails.
-3. Open a local video. Check muted startup, volume, seeking, fullscreen, EOF retention, and replay.
+3. Open a local video. Check muted startup, volume, ±5-minute seeking, reverse/forward 2× toggles, speed selection, fullscreen, EOF retention, and replay.
 4. Use **Discover → Load & Play** with a page exposing an `.m3u8` URL in its DOM. Check automatic native playback and **Stop loading**.
 5. Return to Discover and choose **Save to Library**. Confirm the page appears in Library without Refresh, save again to check duplicate feedback, then restart to check persistence.
-6. Test shortcuts with a control focused and in fullscreen; use **Q** last because it quits immediately.
+6. Browse Files, play a selected file, and return to confirm its folder and selection are retained. Switch to another page and back to check the same behavior.
+7. Test shortcuts with a control focused and in fullscreen, plus Alt+1–4 while typing. Confirm Files retains normal chooser navigation; use **Q** last because it quits immediately.
 
 ## Webpage HLS discovery
 
@@ -258,8 +272,8 @@ user files requires **Reload profiles** in the relevant tab, but no restart or r
 
 ## Roadmap and contribution
 
-The application includes the library/gallery, a libmpv player through `GtkGLArea`, WebKit DOM-based HLS discovery, and sample listing profiles with bounded pagination. Future work includes production website profiles, richer metadata, infinite scrolling, folder/tag editing, and release hardening. See [Plan.md](Plan.md) for the longer-term design; some planned features remain unimplemented.
+The next planned milestone is **bookmark management**: edit titles/descriptions, remove bookmarks with Undo, and assign/filter tags while preserving asynchronous database access, search, sorting, and pagination. These controls are not implemented yet.
 
-See [Plan.md](Plan.md) for architecture and phase acceptance criteria, and [AGENTS.md](AGENTS.md) for contributor guidelines. Source modules live in `src/app/`, `src/ui/`, `src/database/`, `src/models/`, and `src/services/`; embedded assets are in `resources/`, and tests are in `tests/`.
+Following milestones are a profile for a regularly used website, playback history and Recent, folder organization, richer metadata, discovery expansion, and release hardening. See [Plan.md](Plan.md) for scope, acceptance criteria, and validation expectations.
 
-The **Files** page browses local folders using the native file browser, including folder shortcuts and video/all-file filters. Double-click a file or choose **Play selected video** to open it in Player.
+See [Plan.md](Plan.md) for architecture and milestone acceptance criteria, and [AGENTS.md](AGENTS.md) for contributor guidelines. Source modules live in `src/app/`, `src/ui/`, `src/database/`, `src/models/`, and `src/services/`; embedded assets are in `resources/`, and tests are in `tests/`.
