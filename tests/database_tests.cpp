@@ -87,6 +87,25 @@ int main() {
             check(duplicate.video.canonicalUrl == "https://example.com/watch");
             check(duplicate.video.title == "Saved video" && duplicate.video.thumbnailUrl == "https://example.com/poster.jpg");
             check(library.page("Saved", streamgallery::VideoSort::Newest, 0).total == 1);
+            library.updateMetadata(duplicate.video.id, "Edited title", "Unique description phrase");
+            check(library.page("Saved", streamgallery::VideoSort::Newest, 0).total == 0);
+            auto edited = library.page("description", streamgallery::VideoSort::Title, 0);
+            check(edited.total == 1 && edited.items[0].title == "Edited title");
+            check(edited.items[0].description == "Unique description phrase");
+            check(edited.items[0].canonicalUrl == duplicate.video.canonicalUrl);
+            check(edited.items[0].thumbnailUrl == duplicate.video.thumbnailUrl);
+            bool missing = false;
+            try { library.updateMetadata(9999, "Missing", ""); }
+            catch (const std::exception&) { missing = true; }
+            check(missing);
+        }
+        {
+            streamgallery::Database reopened(savedPath.string());
+            streamgallery::LibraryRepository library(reopened);
+            auto video = library.videos().at(0);
+            check(video.title == "Edited title" && video.description == "Unique description phrase");
+            auto duplicate = library.bookmarkWithStatus(video.canonicalUrl, "Replacement");
+            check(!duplicate.created && duplicate.video.description == video.description);
         }
         {
             streamgallery::Database large(":memory:");

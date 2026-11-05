@@ -14,6 +14,12 @@ constexpr int pageSize = 24;
 struct Gallery {
     GtkWidget *root, *search, *sort, *mode, *flow, *status, *selection, *previous, *next, *refresh;
     GtkWidget* discover = nullptr;
+    GtkWidget* edit = nullptr;
+    GtkWidget* editor = nullptr;
+    GtkWidget* titleEntry = nullptr;
+    GtkWidget* descriptionView = nullptr;
+    GtkWidget* editStatus = nullptr;
+    bool saving = false;
     std::function<void(const std::string&)> openPage;
     GCancellable* cancellable = nullptr;
     guint debounce = 0;
@@ -62,6 +68,7 @@ void render(const GalleryPtr& state) {
     GList* children = gtk_container_get_children(GTK_CONTAINER(state->flow));
     for (auto* child = children; child; child = child->next) gtk_widget_destroy(GTK_WIDGET(child->data));
     g_list_free(children);
+    gtk_widget_set_sensitive(state->edit, FALSE);
     if (state->discover) gtk_widget_set_sensitive(state->discover, FALSE);
     gtk_label_set_text(GTK_LABEL(state->selection),"Select a bookmark to see its page URL.");
     const bool list = gtk_combo_box_get_active(GTK_COMBO_BOX(state->mode)) == 1;
@@ -163,12 +170,120 @@ void searchChanged(GtkSearchEntry*, gpointer data) {
         return G_SOURCE_REMOVE;
     },state);
 }
+struct EditRequest {
+    GalleryPtr gallery;
+    std::int64_t id;
+    std::string path, title, description;
+};
+void editWorker(GTask* task, gpointer, gpointer data, GCancellable*) {
+    auto* request = static_cast<EditRequest*>(data);
+    try {
+        Database database(request->path);
+        LibraryRepository(database).updateMetadata(request->id, request->title, request->description);
+        g_task_return_boolean(task, TRUE);
+    } catch (const std::exception& error) {
+        g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s", error.what());
+    }
+}
+void editReady(GObject*, GAsyncResult* result, gpointer) {
+    auto* task = G_TASK(result);
+    auto state = static_cast<EditRequest*>(g_task_get_task_data(task))->gallery;
+    GError* error = nullptr;
+    g_task_propagate_boolean(task, &error);
+    state->saving = false;
+    if (!state->closed && state->editor) {
+        if (error) {
+            gtk_label_set_text(GTK_LABEL(state->editStatus), error->message);
+            gtk_widget_set_sensitive(state->titleEntry, TRUE);
+            gtk_widget_set_sensitive(state->descriptionView, TRUE);
+            gtk_dialog_set_response_sensitive(GTK_DIALOG(state->editor), GTK_RESPONSE_ACCEPT, TRUE);
+        } else {
+            gtk_widget_destroy(state->editor);
+            // A pending search must not supersede the post-save refresh.
+            if (state->debounce) { g_source_remove(state->debounce); state->debounce = 0; }
+            loadPage(state);
+        }
+    }
+    g_clear_error(&error);
+}
+void editSelected(GtkButton*, gpointer data) {
+    auto state = shared(static_cast<Gallery*>(data));
+    if (state->editor || state->saving) return;
+    GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(state->flow));
+    if (!selected) return;
+    const int index = gtk_flow_box_child_get_index(GTK_FLOW_BOX_CHILD(selected->data));
+    g_list_free(selected);
+    if (index < 0 || static_cast<std::size_t>(index) >= state->page.items.size()) return;
+    const auto video = state->page.items[index];
+    state->editor = gtk_dialog_new_with_buttons("Edit bookmark",
+        GTK_WINDOW(gtk_widget_get_toplevel(state->root)),
+        static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
+        "Cancel", GTK_RESPONSE_CANCEL, "Save", GTK_RESPONSE_ACCEPT, nullptr);
+    gtk_widget_set_name(state->editor, "library-editor");
+    gtk_window_set_default_size(GTK_WINDOW(state->editor), 480, 320);
+    auto* content = gtk_dialog_get_content_area(GTK_DIALOG(state->editor));
+    gtk_container_set_border_width(GTK_CONTAINER(content), 12);
+    gtk_box_set_spacing(GTK_BOX(content), 8);
+    auto* titleLabel = gtk_label_new("Title");
+    state->titleEntry = gtk_entry_new();
+    gtk_widget_set_name(state->titleEntry, "library-edit-title");
+    gtk_entry_set_text(GTK_ENTRY(state->titleEntry), video.title.c_str());
+    atk_object_set_name(gtk_widget_get_accessible(state->titleEntry), "Bookmark title");
+    auto* descriptionLabel = gtk_label_new("Description");
+    state->descriptionView = gtk_text_view_new();
+    gtk_widget_set_name(state->descriptionView, "library-edit-description");
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(state->descriptionView), GTK_WRAP_WORD_CHAR);
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(state->descriptionView)), video.description.c_str(), -1);
+    atk_object_set_name(gtk_widget_get_accessible(state->descriptionView), "Bookmark description");
+    auto* scroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_container_add(GTK_CONTAINER(scroll), state->descriptionView);
+    state->editStatus = gtk_label_new("");
+    gtk_label_set_line_wrap(GTK_LABEL(state->editStatus), TRUE);
+    for (auto* widget : {titleLabel, state->titleEntry, descriptionLabel})
+        gtk_box_pack_start(GTK_BOX(content), widget, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), scroll, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(content), state->editStatus, FALSE, FALSE, 0);
+    g_object_set_data_full(G_OBJECT(state->editor), "edit-request",
+        new EditRequest{state, video.id,
+            (std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db").string(), {}, {}},
+        [](gpointer request) { delete static_cast<EditRequest*>(request); });
+    g_signal_connect(state->editor, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer data) {
+        static_cast<Gallery*>(data)->editor = nullptr;
+    }), state.get());
+    g_signal_connect(state->editor, "response", G_CALLBACK(+[](GtkDialog* dialog, gint response, gpointer) {
+        auto* captured = static_cast<EditRequest*>(g_object_get_data(G_OBJECT(dialog), "edit-request"));
+        auto state = captured->gallery;
+        if (state->saving) return;
+        if (response != GTK_RESPONSE_ACCEPT) { gtk_widget_destroy(GTK_WIDGET(dialog)); return; }
+        auto request = std::make_unique<EditRequest>(*captured);
+        request->title = gtk_entry_get_text(GTK_ENTRY(state->titleEntry));
+        auto* buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(state->descriptionView));
+        GtkTextIter start;
+        GtkTextIter end;
+        gtk_text_buffer_get_bounds(buffer, &start, &end);
+        gchar* description = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+        request->description = description; g_free(description);
+        state->saving = true;
+        gtk_widget_set_sensitive(state->titleEntry, FALSE);
+        gtk_widget_set_sensitive(state->descriptionView, FALSE);
+        gtk_dialog_set_response_sensitive(dialog, GTK_RESPONSE_ACCEPT, FALSE);
+        gtk_label_set_text(GTK_LABEL(state->editStatus), "Saving…");
+        // Writes finish independently of gallery query cancellation or destruction.
+        auto* task = g_task_new(nullptr, nullptr, editReady, nullptr);
+        g_task_set_task_data(task, request.release(), [](gpointer data) { delete static_cast<EditRequest*>(data); });
+        g_task_run_in_thread(task, editWorker);
+        g_object_unref(task);
+    }), nullptr);
+    gtk_widget_show_all(state->editor);
+}
 void selectionChanged(GtkFlowBox* flow, gpointer data) {
     auto* state = static_cast<Gallery*>(data);
+    gtk_widget_set_sensitive(state->edit, FALSE);
     GList* selected = gtk_flow_box_get_selected_children(flow);
     if (selected) {
         const int index = gtk_flow_box_child_get_index(GTK_FLOW_BOX_CHILD(selected->data));
         if (index >= 0 && static_cast<std::size_t>(index) < state->page.items.size()) {
+            gtk_widget_set_sensitive(state->edit, TRUE);
             const auto& video = state->page.items[index];
             gtk_label_set_text(GTK_LABEL(state->selection),video.canonicalUrl.c_str());
             if (state->discover) gtk_widget_set_sensitive(state->discover, TRUE);
@@ -212,6 +327,11 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     gtk_label_set_selectable(GTK_LABEL(state->selection),TRUE);
     gtk_label_set_ellipsize(GTK_LABEL(state->selection),PANGO_ELLIPSIZE_MIDDLE);
     gtk_box_pack_start(GTK_BOX(state->root),state->selection,FALSE,FALSE,0);
+    state->edit = gtk_button_new_with_label("Edit selected");
+    gtk_widget_set_name(state->edit, "library-edit");
+    gtk_widget_set_sensitive(state->edit, FALSE);
+    gtk_box_pack_start(GTK_BOX(state->root), state->edit, FALSE, FALSE, 0);
+    g_signal_connect(state->edit, "clicked", G_CALLBACK(editSelected), state.get());
     if (state->openPage) {
         state->discover = gtk_button_new_with_label("Discover & Play selected");
         gtk_widget_set_name(state->discover, "library-discover");
@@ -253,6 +373,7 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     }),state.get());
     g_signal_connect(state->root,"destroy",G_CALLBACK(+[](GtkWidget*, gpointer data) {
         auto* state = static_cast<Gallery*>(data); state->closed = true;
+        if (state->editor) gtk_widget_destroy(state->editor);
         if (state->debounce) { g_source_remove(state->debounce); state->debounce = 0; }
         if (state->cancellable) g_cancellable_cancel(state->cancellable);
     }),state.get());

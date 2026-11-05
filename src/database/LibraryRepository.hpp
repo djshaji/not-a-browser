@@ -18,6 +18,7 @@ public:
     explicit LibraryRepository(Database& database) : db(database) {}
     Video bookmark(const std::string& url, const std::string& title, const std::string& thumbnailUrl = "");
     BookmarkResult bookmarkWithStatus(const std::string& url, const std::string& title, const std::string& thumbnailUrl = "");
+    void updateMetadata(std::int64_t videoId, const std::string& title, const std::string& description);
     std::vector<Video> videos();
     VideoPage page(const std::string& search, VideoSort sort, int offset, int limit = 24);
     Folder createFolder(const std::string& name, std::int64_t parentId = 0);

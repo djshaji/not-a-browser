@@ -58,14 +58,19 @@ BookmarkResult LibraryRepository::bookmarkWithStatus(const std::string& url, con
     Statement insert(db,"INSERT INTO videos(canonical_url,title,thumbnail_url) VALUES(?,?,?) ON CONFLICT(canonical_url) DO NOTHING");
     insert.text(1,canonical); insert.text(2,title); insert.text(3,thumbnailUrl); insert.step();
     const bool created = sqlite3_changes(db.handle()) != 0;
-    Statement select(db,"SELECT id,canonical_url,title,thumbnail_url FROM videos WHERE canonical_url=?");
+    Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description FROM videos WHERE canonical_url=?");
     select.text(1,canonical); if (!select.step()) throw std::runtime_error("Bookmark was not saved");
-    return {{select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3)}, created};
+    return {{select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4)}, created};
+}
+void LibraryRepository::updateMetadata(std::int64_t videoId, const std::string& title, const std::string& description) {
+    Statement update(db,"UPDATE videos SET title=?,description=? WHERE id=?");
+    update.text(1,title); update.text(2,description); update.integer(3,videoId); update.step();
+    if (sqlite3_changes(db.handle()) != 1) throw std::runtime_error("Bookmark no longer exists");
 }
 std::vector<Video> LibraryRepository::videos() {
-    Statement select(db,"SELECT id,canonical_url,title,thumbnail_url FROM videos ORDER BY id");
+    Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description FROM videos ORDER BY id");
     std::vector<Video> result;
-    while(select.step()) result.push_back({select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3)});
+    while(select.step()) result.push_back({select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4)});
     return result;
 }
 VideoPage LibraryRepository::page(const std::string& search, VideoSort sort, int offset, int limit) {
@@ -94,13 +99,13 @@ VideoPage LibraryRepository::page(const std::string& search, VideoSort sort, int
     if (!expression.empty()) count.text(1,expression);
     if (!count.step()) throw std::runtime_error("Cannot count library records");
     result.total = count.id();
-    const std::string selectSql = "SELECT id,canonical_url,title,thumbnail_url FROM videos" + where +
+    const std::string selectSql = "SELECT id,canonical_url,title,thumbnail_url,description FROM videos" + where +
         " ORDER BY " + order + " LIMIT ? OFFSET ?";
     Statement select(db, selectSql.c_str());
     int index = 1;
     if (!expression.empty()) select.text(index++,expression);
     select.integer(index++,limit); select.integer(index,offset);
-    while (select.step()) result.items.push_back({select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3)});
+    while (select.step()) result.items.push_back({select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4)});
     return result;
 }
 Folder LibraryRepository::createFolder(const std::string& name, std::int64_t parentId) {

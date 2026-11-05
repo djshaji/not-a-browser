@@ -133,6 +133,55 @@ int main(int argc, char** argv) {
         gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-search")),"Unique");
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status),"1–1 of 1 videos")==0; });
         g_assert_cmpuint(childCount(),==,1);
+        auto* edit = findNamed(window, "library-edit");
+        g_assert_false(gtk_widget_get_sensitive(edit));
+        gtk_flow_box_select_child(GTK_FLOW_BOX(flow), gtk_flow_box_get_child_at_index(GTK_FLOW_BOX(flow), 0));
+        g_assert_true(gtk_widget_get_sensitive(edit));
+        gtk_button_clicked(GTK_BUTTON(edit));
+        auto findEditor = [] {
+            GtkWidget* editor = nullptr;
+            GList* toplevels = gtk_window_list_toplevels();
+            for (auto* item = toplevels; item; item = item->next)
+                if (g_strcmp0(gtk_widget_get_name(GTK_WIDGET(item->data)), "library-editor") == 0)
+                    editor = GTK_WIDGET(item->data);
+            g_list_free(toplevels);
+            return editor;
+        };
+        auto* editor = findEditor();
+        g_assert_nonnull(editor);
+        std::string originalTitle = gtk_entry_get_text(GTK_ENTRY(findNamed(editor, "library-edit-title")));
+        gtk_entry_set_text(GTK_ENTRY(findNamed(editor, "library-edit-title")), "Discard this edit");
+        gtk_dialog_response(GTK_DIALOG(editor), GTK_RESPONSE_CANCEL);
+        g_assert_null(findEditor());
+        gtk_button_clicked(GTK_BUTTON(edit));
+        editor = findEditor();
+        g_assert_nonnull(editor);
+        g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(findNamed(editor, "library-edit-title"))), ==, originalTitle.c_str());
+        const char* editedTitle = iteration == 0 ? "Unique edited concert" : "Renamed concert";
+        gtk_entry_set_text(GTK_ENTRY(findNamed(editor, "library-edit-title")), editedTitle);
+        auto* description = GTK_TEXT_VIEW(findNamed(editor, "library-edit-description"));
+        gtk_text_buffer_set_text(gtk_text_view_get_buffer(description), "Persisted description", -1);
+        if (const char* screenshot = g_getenv("STREAM_GALLERY_EDITOR_SCREENSHOT")) {
+            while (gtk_events_pending()) gtk_main_iteration();
+            GdkPixbuf* pixels = gdk_pixbuf_get_from_window(gtk_widget_get_window(editor), 0, 0,
+                gtk_widget_get_allocated_width(editor), gtk_widget_get_allocated_height(editor));
+            g_assert_nonnull(pixels);
+            g_assert_true(gdk_pixbuf_save(pixels, screenshot, "png", nullptr, nullptr));
+            g_object_unref(pixels);
+        }
+        gtk_dialog_response(GTK_DIALOG(editor), GTK_RESPONSE_ACCEPT);
+        // Changing pages during a save must not discard it or target another record.
+        gtk_stack_set_visible_child_name(stack, "files");
+        waitFor([&] {
+            streamgallery::Database db((libraryDirectory / "library.db").string());
+            auto page = streamgallery::LibraryRepository(db).page("Persisted", streamgallery::VideoSort::Newest, 0);
+            return page.total == 1 && page.items[0].title == editedTitle;
+        });
+        waitFor([&] { return !findEditor() && !gtk_widget_get_sensitive(edit) &&
+            (iteration == 0 ? g_strcmp0(gtk_label_get_text(status), "1–1 of 1 videos") == 0 :
+                g_str_has_prefix(gtk_label_get_text(status), "No videos found.")); });
+        g_assert_cmpuint(childCount(), ==, iteration == 0 ? 1 : 0);
+        gtk_stack_set_visible_child_name(stack, "gallery");
 #endif
 #ifdef HAVE_PLAYER_TESTS
         g_assert_nonnull(findWidget(window, GTK_TYPE_GL_AREA));

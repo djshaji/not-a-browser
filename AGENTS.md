@@ -66,7 +66,9 @@ Library/browser data and caches follow XDG data/cache directories under `stream-
 
 ## Next Planned Milestone: Bookmark Management
 
-The next proposed work is selected-bookmark title/description editing, removal with Undo, and tag assignment/filtering. These are roadmap items, not current UI features. Folder/tag creation and relationship APIs exist; metadata editing, deletion/restoration, tag enumeration/removal, and filtered queries still need repository support. The database has a description column, but the current `Video` model does not expose it.
+Selected-bookmark title/description editing is implemented through the Library editor and `LibraryRepository::updateMetadata`. Descriptions are exposed by the `Video` model and repository queries; existing FTS triggers index edits. Preserve captured record identity, background writes that finish across navigation/destruction, retryable editor errors, and gallery refresh after success. No schema migration is needed for metadata editing.
+
+The next proposed work is removal with Undo, then tag assignment/filtering. These remain roadmap items. Folder/tag creation and relationship APIs exist; deletion/restoration, tag enumeration/removal, and filtered queries still need repository support.
 
 When implementing this milestone, keep canonical URLs and record identity stable during edits, update FTS consistently, and preserve metadata on duplicate imports. Define Undo lifetime and conflict behavior; restore metadata and folder/tag relationships transactionally. Bookmark removal must never remove local media files. Compose tag filters with search, sorting, counts, and bounded pagination, resetting or clamping pages when results shrink.
 

@@ -12,7 +12,7 @@ until implemented and validated.
 | Area | Implemented behavior |
 | --- | --- |
 | Application | Native window, resizable sidebar, Library/Discover/Player/Files navigation, session theme switch, and keyboard shortcuts. |
-| Library | SQLite schema version 2, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, and bookmark CLI. |
+| Library | SQLite schema version 2, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, and asynchronous selected-bookmark title/description editing. |
 | Gallery | Grid/list views, selection, title/description prefix search, sorting, 24-item pagination, asynchronous queries, and bounded thumbnail caching. |
 | Playback | GtkGLArea/libmpv rendering, local files and direct media URLs, muted startup, seeking, reverse/forward 2×, speed controls, fullscreen, EOF/replay, and mpv resume files. |
 | Files | Native local file chooser, video/all-file filters, playback activation, and session folder/selection restoration across page switches. Browsing remains available without playback. |
@@ -22,9 +22,9 @@ until implemented and validated.
 | Validation | Database, thumbnails, adapter profiles, HLS inspection, rendered discovery, listings, UI smoke, and Python fixture-runner tests. |
 
 Folder/tag creation and video relationship APIs exist. Their editing UI,
-bookmark metadata editing, removal/Undo, and tag filtering are not implemented.
-The database stores descriptions, but the current `Video` model and repository
-queries do not expose them for editing. Playback resume currently belongs to
+removal/Undo, and tag filtering are not implemented. The `Video` model and
+repository queries expose descriptions, and metadata updates maintain FTS through
+the existing database triggers. Playback resume currently belongs to
 libmpv; there is no library-level Recent/history workflow.
 
 ## Architecture and boundaries
@@ -59,10 +59,10 @@ file, 64 custom listing profiles, five pages/batches, 120 total cards, and at mo
 Make saved bookmarks manageable from Library. Deliver the work in small,
 independently usable steps:
 
-1. **Edit metadata.** Add an editor for the selected bookmark's title and
-   description. Extend the model/repository to read and update descriptions.
-   Keep the canonical URL and bookmark identity stable. Refresh the gallery after
-   success and keep FTS results consistent with edits.
+1. **Edit metadata (implemented).** The first slice adds an editor for the selected bookmark's title and
+   description. The model/repository read and update descriptions.
+   The canonical URL and bookmark identity stay stable. The gallery refreshes after
+   success and FTS results reflect edits.
 2. **Remove with Undo.** Add explicit removal and a clearly scoped Undo action.
    Define Undo lifetime and duplicate/conflict behavior before implementation.
    Restore bookmark metadata and folder/tag relationships transactionally;
@@ -72,7 +72,7 @@ independently usable steps:
    text search, sorting, counts, and pagination. Reset or clamp pages when results
    shrink. Keep queries and rendered widgets bounded.
 
-Existing folder/tag APIs are a starting point; metadata updates, deletion,
+Existing folder/tag APIs and metadata editing are a starting point; deletion,
 restoration, tag enumeration/removal, and filtered queries still need repository
 support. Prefer the existing schema where sufficient. Introduce transactional,
 versioned migrations only when storage changes are required.
@@ -144,5 +144,5 @@ visible UI changes; and update README.md with actual behavior. Keep this roadmap
 current as milestones land. Do not present planned controls as working features.
 
 Use the build and test commands in README.md and the feature-specific validation
-rules in AGENTS.md. No application implementation is included in this roadmap
-update; bookmark management is the next proposed development milestone.
+rules in AGENTS.md. Metadata editing is implemented; removal with Undo is the next proposed
+development slice within bookmark management.
