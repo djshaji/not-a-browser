@@ -8,7 +8,7 @@ The current build provides:
 
 - Native window, resizable sidebar, Library/Discover/Player/Files navigation, and a session-only light/dark theme switch.
 - SQLite bookmarks, canonical URL deduplication, transactional migrations, and full-text indexing.
-- Grid/list gallery with selection, newest/oldest/title sorting, prefix search, exact-name tag/folder filters, and 24-item pagination.
+- Grid/list gallery with selection, newest/oldest/title sorting and Recent playback history, prefix search, exact-name tag/folder filters, and 24-item pagination.
 - Bookmark title/description editing and tag/top-level folder assignment, with transactional saves and removal/Undo.
 - Background database queries and thumbnail loading, cancellation of obsolete work, and a bounded thumbnail cache.
 - A command-line bookmark tool, plus database, thumbnail, player, DOM extraction, and UI tests.
@@ -111,6 +111,7 @@ Open **Library** to browse saved bookmarks. Press **Refresh** after adding recor
 through the CLI or another application; saves made in Discover refresh it automatically.
 
 - Choose **Grid** or **List**, then sort by newest, oldest, or title.
+- Choose **Recent** in the same dropdown to show only played bookmarks, most recently played first. Search, Tag, Folder, pagination, editing, and Undo work in Recent too.
 - Search matches title/description prefixes. Multiple terms must all match; FTS operators are not exposed.
 - **Tag** and **Folder** accept one exact, case-sensitive name each. They intersect with text search and each other. Surrounding spaces are trimmed; an empty field adds no restriction. Folder matches top-level memberships only, without including nested-folder contents.
 - Changing search or either filter resets pagination. **Previous** and **Next** browse 24 records per page.
@@ -176,6 +177,17 @@ At the end of a video, the file stays loaded with its final frame visible. **P**
 
 A working OpenGL desktop session is required. Errors appear below the playback controls; hover over a shortened message to read its full text.
 
+Successful video-page playback updates the saved page's last-played time in a
+background worker and refreshes Library automatically. Recent stores one latest
+playback time per bookmark and survives restart. Loading failures, local files,
+direct media URLs, and pages absent from Library when history is written do not
+create history entries or bookmarks. Saving a page after playback does not
+retroactively record it; play it again to include it in Recent. Removing a
+bookmark removes its history; Undo restores that time along with its metadata.
+Recent opens the durable webpage through discovery again, so expired stream URLs
+are never used as bookmark identities. Pause/resume and EOF replay within an
+already loaded file do not create additional history updates.
+
 libmpv saves resume state when replacing a playing file or closing the application. Resume state is separate from library bookmarks; temporary stream URLs can expire and require loading the webpage again.
 
 ## Keyboard shortcuts
@@ -206,7 +218,7 @@ Single-key shortcuts work throughout the main window and in fullscreen when focu
 | Browser website data | `$XDG_DATA_HOME/stream-gallery/browser/` | `~/.local/share/stream-gallery/browser/` |
 | Browser cache | `$XDG_CACHE_HOME/stream-gallery/browser/` | `~/.cache/stream-gallery/browser/` |
 
-The current schema is version 2, which adds thumbnail URLs and a title-sort index. Metadata/tag/folder editing and Undo use this schema without an additional migration. Existing version-1 databases migrate automatically while preserving bookmarks, folders, tags, and relationships. Use temporary XDG directories when experimenting with disposable data.
+The current schema is version 3, which adds a last-played timestamp and Recent index. Existing version-1 and version-2 databases migrate automatically while preserving bookmarks, folders, tags, and relationships. Existing bookmarks start without playback history. Use temporary XDG directories when experimenting with disposable data.
 
 ## Tests
 
@@ -218,13 +230,13 @@ With the library, player, and discovery enabled, seven C++ tests are registered:
 
 | Test | Coverage |
 | --- | --- |
-| `database` | Persistence, atomic metadata/tag/folder editing, root-folder reuse and nested-membership preservation, tag normalization/deduplication, combined search/tag/folder filtering and pagination, FTS updates, transactional removal/restoration, relationship rollback, duplicate and reused-ID conflicts, missing-record errors, migrations, atomic new/duplicate bookmark reporting, metadata preservation, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
+| `database` | Persistence, version-3 history migration, Recent ordering/filtering/pagination, history preservation through edits/duplicates/removal/Undo, atomic metadata/tag/folder editing, root-folder reuse and nested-membership preservation, tag normalization/deduplication, combined search/tag/folder filtering and pagination, FTS updates, transactional removal/restoration, relationship rollback, duplicate and reused-ID conflicts, missing-record errors, migrations, atomic new/duplicate bookmark reporting, metadata preservation, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
 | `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
 | `adapter-profiles` | Config-directory discovery, filename ordering, listing pagination types, HLS override loading, and rejection of invalid, unsupported, and oversized profiles. |
 | `hls-discovery` | Master/media classification, reference resolution, local HTTP redirects, invalid/oversized responses, request headers, and cancellation without a display. |
 | `discovery` | Rendered DOM/title/poster extraction, verified playlists, cancellation, asynchronous saving/duplicates, metadata snapshots during navigation, save failure/retry, automatic gallery refresh, persisted library reopening, and local webpage-to-HLS playback when ffmpeg is installed. |
 | `listings` | Config-loaded profile selection, two local listing fixtures, relative links/posters, missing titles, invalid URLs, per-card Play/Save, deduplication, next-link loops, page limits, dynamic button pagination, delayed DOM insertion, Stop/navigation, and destruction during extraction. |
-| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, metadata/tag/folder editing, cancelled edits, assignment persistence across window recreation, combined filters, tag/folder unassignment, and removal/Undo across page navigation, filtered removal, pagination updates, Undo conflicts/retry, destruction during removal, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, transport seeking and reverse/forward speed state, local file playback and folder/selection restoration, and quit cleanup. |
+| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, metadata/tag/folder editing, cancelled edits, assignment persistence across window recreation, combined filters, tag/folder unassignment, and removal/Undo across page navigation, filtered removal, pagination updates, Undo conflicts/retry, destruction during removal, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, transport seeking and reverse/forward speed state, local file playback and folder/selection restoration, successful playback appearing in Recent, failed loads excluded from history, and quit cleanup. |
 
 When Python 3 is available, CTest also registers `adapter-runner` for the local
 generic JSON adapter runner. See [the adapter example](examples/adapters/README.md)
@@ -314,6 +326,6 @@ user files requires **Reload profiles** in the relevant tab, but no restart or r
 
 Library supports title/description, tag, and top-level folder editing, combined exact-name tag/folder filters, and removal with a session Undo slot. Folder trees, folder rename/deletion, global tag renaming/deletion, choosers, and multiple-tag filters remain future work.
 
-Following milestones are a profile for a regularly used website, playback history and Recent, nested folder organization, richer metadata, discovery expansion, and release hardening. See [Plan.md](Plan.md) for scope, acceptance criteria, and validation expectations.
+Following milestones are a profile for a regularly used website, nested folder organization, richer metadata, discovery expansion, and release hardening. Recent playback history is implemented for saved bookmarks. See [Plan.md](Plan.md) for scope, acceptance criteria, and validation expectations.
 
 See [Plan.md](Plan.md) for architecture and milestone acceptance criteria, and [AGENTS.md](AGENTS.md) for contributor guidelines. Source modules live in `src/app/`, `src/ui/`, `src/database/`, `src/models/`, and `src/services/`; embedded assets are in `resources/`, and tests are in `tests/`.

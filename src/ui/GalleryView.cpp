@@ -467,7 +467,7 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     state->search = gtk_search_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(state->search),"Search titles and descriptions");
     state->sort = gtk_combo_box_text_new();
-    for (const char* label : {"Newest first", "Oldest first", "Title A–Z"})
+    for (const char* label : {"Newest first", "Oldest first", "Title A–Z", "Recent"})
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state->sort),label);
     gtk_combo_box_set_active(GTK_COMBO_BOX(state->sort),0);
     state->mode = gtk_combo_box_text_new();

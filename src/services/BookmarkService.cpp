@@ -38,4 +38,34 @@ void saveBookmarkAsync(const std::string& page, const std::string& title, const 
     });
     g_object_unref(task);
 }
+void recordPlaybackAsync(const std::string& page, std::function<void()> refresh) {
+    struct Playback {
+        std::string path, page;
+        gint64 time;
+        std::function<void()> refresh;
+    };
+    auto path = std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db";
+    auto* request = new Playback{path.string(), page, g_get_real_time(), std::move(refresh)};
+    auto* task = g_task_new(nullptr, nullptr, +[](GObject*, GAsyncResult* result, gpointer) {
+        auto* task = G_TASK(result);
+        auto* request = static_cast<Playback*>(g_task_get_task_data(task));
+        GError* error = nullptr;
+        const bool changed = g_task_propagate_boolean(task, &error);
+        if (error) g_printerr("Playback history: %s\n", error->message);
+        else if (changed && request->refresh) request->refresh();
+        g_clear_error(&error);
+    }, nullptr);
+    g_task_set_task_data(task, request, +[](gpointer data) { delete static_cast<Playback*>(data); });
+    g_task_run_in_thread(task, +[](GTask* task, gpointer, gpointer data, GCancellable*) {
+        auto* request = static_cast<Playback*>(data);
+        try {
+            Database database(request->path);
+            g_task_return_boolean(task, LibraryRepository(database).recordPlayback(request->page, request->time));
+        } catch (const std::exception& error) {
+            g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s", error.what());
+        }
+    });
+    g_object_unref(task);
+}
+
 }

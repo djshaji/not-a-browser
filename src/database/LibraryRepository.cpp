@@ -65,9 +65,9 @@ BookmarkResult LibraryRepository::bookmarkWithStatus(const std::string& url, con
     Statement insert(db,"INSERT INTO videos(canonical_url,title,thumbnail_url) VALUES(?,?,?) ON CONFLICT(canonical_url) DO NOTHING");
     insert.text(1,canonical); insert.text(2,title); insert.text(3,thumbnailUrl); insert.step();
     const bool created = sqlite3_changes(db.handle()) != 0;
-    Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description FROM videos WHERE canonical_url=?");
+    Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description,last_played_at FROM videos WHERE canonical_url=?");
     select.text(1,canonical); if (!select.step()) throw std::runtime_error("Bookmark was not saved");
-    return {{select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4),videoTags(select.id()),videoRootFolders(select.id())}, created};
+    return {{select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4),videoTags(select.id()),videoRootFolders(select.id()),select.id(5)}, created};
 }
 void LibraryRepository::updateMetadata(std::int64_t videoId, const std::string& title, const std::string& description) {
     Statement update(db,"UPDATE videos SET title=?,description=? WHERE id=?");
@@ -125,11 +125,11 @@ RemovedBookmark LibraryRepository::removeBookmark(std::int64_t videoId) {
     db.execute("BEGIN IMMEDIATE");
     try {
         RemovedBookmark removed;
-        Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description,added_at FROM videos WHERE id=?");
+        Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description,last_played_at,added_at FROM videos WHERE id=?");
         select.integer(1,videoId);
         if (!select.step()) throw std::runtime_error("Bookmark no longer exists");
-        removed.video = {select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4),videoTags(select.id()),videoRootFolders(select.id())};
-        removed.addedAt = select.textColumn(5);
+        removed.video = {select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4),videoTags(select.id()),videoRootFolders(select.id()),select.id(5)};
+        removed.addedAt = select.textColumn(6);
         Statement folders(db,"SELECT folder_id FROM video_folders WHERE video_id=?");
         folders.integer(1,videoId);
         while (folders.step()) removed.folderIds.push_back(folders.id());
@@ -151,9 +151,9 @@ void LibraryRepository::restoreBookmark(const RemovedBookmark& removed) {
         Statement occupied(db,"SELECT id FROM videos WHERE id=?");
         occupied.integer(1,removed.video.id);
         const auto id = occupied.step() ? 0 : removed.video.id;
-        Statement insert(db,"INSERT INTO videos(id,canonical_url,title,thumbnail_url,description,added_at) VALUES(NULLIF(?,0),?,?,?,?,?)");
+        Statement insert(db,"INSERT INTO videos(id,canonical_url,title,thumbnail_url,description,added_at,last_played_at) VALUES(NULLIF(?,0),?,?,?,?,?,?)");
         insert.integer(1,id); insert.text(2,removed.video.canonicalUrl); insert.text(3,removed.video.title);
-        insert.text(4,removed.video.thumbnailUrl); insert.text(5,removed.video.description); insert.text(6,removed.addedAt);
+        insert.text(4,removed.video.thumbnailUrl); insert.text(5,removed.video.description); insert.text(6,removed.addedAt); insert.integer(7,removed.video.lastPlayedAt);
         insert.step();
         const auto restoredId = sqlite3_last_insert_rowid(db.handle());
         for (auto folder : removed.folderIds) addToFolder(restoredId,folder);
@@ -161,10 +161,16 @@ void LibraryRepository::restoreBookmark(const RemovedBookmark& removed) {
         db.execute("COMMIT");
     } catch (...) { db.execute("ROLLBACK"); throw; }
 }
+bool LibraryRepository::recordPlayback(const std::string& pageUrl, std::int64_t playedAt) {
+    if (playedAt <= 0) throw std::invalid_argument("Invalid playback timestamp");
+    Statement update(db,"UPDATE videos SET last_played_at=max(last_played_at,?) WHERE canonical_url=?");
+    update.integer(1,playedAt); update.text(2,canonicalizeUrl(pageUrl)); update.step();
+    return sqlite3_changes(db.handle()) != 0;
+}
 std::vector<Video> LibraryRepository::videos() {
-    Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description FROM videos ORDER BY id");
+    Statement select(db,"SELECT id,canonical_url,title,thumbnail_url,description,last_played_at FROM videos ORDER BY id");
     std::vector<Video> result;
-    while(select.step()) result.push_back({select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4),videoTags(select.id()),videoRootFolders(select.id())});
+    while(select.step()) result.push_back({select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4),videoTags(select.id()),videoRootFolders(select.id()),select.id(5)});
     return result;
 }
 VideoPage LibraryRepository::page(const std::string& search, VideoSort sort, int offset, int limit, const std::string& tag, const std::string& folder) {
@@ -191,7 +197,8 @@ VideoPage LibraryRepository::page(const std::string& search, VideoSort sort, int
     const auto folderName = trimName(folder);
     if (!folderName.empty()) where += (where.empty() ? " WHERE " : " AND ") +
         std::string("id IN (SELECT video_id FROM video_folders JOIN folders ON folders.id=video_folders.folder_id WHERE folders.parent_id IS NULL AND folders.name=?)");
-    const char* order = sort == VideoSort::Title ? "title COLLATE NOCASE,id" :
+    if (sort == VideoSort::Recent) where += (where.empty() ? " WHERE " : " AND ") + std::string("last_played_at>0");
+    const char* order = sort == VideoSort::Recent ? "last_played_at DESC,id DESC" : sort == VideoSort::Title ? "title COLLATE NOCASE,id" :
         sort == VideoSort::Oldest ? "id ASC" : "id DESC";
     VideoPage result;
     const std::string countSql = "SELECT count(*) FROM videos" + where;
@@ -202,7 +209,7 @@ VideoPage LibraryRepository::page(const std::string& search, VideoSort sort, int
     if (!folderName.empty()) count.text(countIndex,folderName);
     if (!count.step()) throw std::runtime_error("Cannot count library records");
     result.total = count.id();
-    const std::string selectSql = "SELECT id,canonical_url,title,thumbnail_url,description FROM videos" + where +
+    const std::string selectSql = "SELECT id,canonical_url,title,thumbnail_url,description,last_played_at FROM videos" + where +
         " ORDER BY " + order + " LIMIT ? OFFSET ?";
     Statement select(db, selectSql.c_str());
     int index = 1;
@@ -210,7 +217,7 @@ VideoPage LibraryRepository::page(const std::string& search, VideoSort sort, int
     if (!tagName.empty()) select.text(index++,tagName);
     if (!folderName.empty()) select.text(index++,folderName);
     select.integer(index++,limit); select.integer(index,offset);
-    while (select.step()) result.items.push_back({select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4),videoTags(select.id()),videoRootFolders(select.id())});
+    while (select.step()) result.items.push_back({select.id(),select.textColumn(1),select.textColumn(2),select.textColumn(3),select.textColumn(4),videoTags(select.id()),videoRootFolders(select.id()),select.id(5)});
     return result;
 }
 Folder LibraryRepository::createFolder(const std::string& name, std::int64_t parentId) {

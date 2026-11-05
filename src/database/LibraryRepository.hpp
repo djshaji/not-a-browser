@@ -5,7 +5,7 @@
 #include <optional>
 namespace streamgallery {
 std::string canonicalizeUrl(const std::string& url);
-enum class VideoSort { Newest, Oldest, Title };
+enum class VideoSort { Newest, Oldest, Title, Recent };
 struct VideoPage {
     std::vector<Video> items;
     std::int64_t total = 0;
@@ -32,6 +32,8 @@ public:
     std::vector<std::string> videoRootFolders(std::int64_t videoId);
     RemovedBookmark removeBookmark(std::int64_t videoId);
     void restoreBookmark(const RemovedBookmark& removed);
+    // Updates an existing durable page only; never creates a bookmark.
+    bool recordPlayback(const std::string& pageUrl, std::int64_t playedAt);
     std::vector<Video> videos();
     VideoPage page(const std::string& search, VideoSort sort, int offset, int limit = 24, const std::string& tag = "",
                    const std::string& folder = "");

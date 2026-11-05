@@ -45,6 +45,8 @@ public:
     std::string rendererError;
     struct PendingLoad { std::string path, referrer, userAgent; };
     std::optional<PendingLoad> pendingLoad;
+    std::string historyPath, historyPage;
+    std::function<void(const std::string&)> playbackStarted;
 
     PlayerView() {
         auto* toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -419,6 +421,9 @@ public:
             message(rendererError.empty() ? "Video renderer is not ready; open the Player page first" : rendererError.c_str());
             return;
         }
+        poll(); // Deliver completed loads before associating the next request.
+        historyPath = path;
+        historyPage = referrer;
         if (loaded) { const char* save[] = {"write-watch-later-config", nullptr}; command(save); }
         loaded = false;
         atEnd = false;
@@ -536,7 +541,16 @@ public:
                     updatePlaybackControls();
                 }
             }
-            if (event->event_id == MPV_EVENT_FILE_LOADED) { loaded = true; message("Playing"); }
+            if (event->event_id == MPV_EVENT_FILE_LOADED) {
+                loaded = true; message("Playing");
+                char* path = mpv_get_property_string(mpv, "path");
+                if (path && historyPath == path && !historyPage.empty()) {
+                    auto page = std::move(historyPage);
+                    historyPage.clear();
+                    if (playbackStarted) playbackStarted(page);
+                }
+                mpv_free(path);
+            }
             if (event->event_id == MPV_EVENT_END_FILE) {
                 auto* end = static_cast<mpv_event_end_file*>(event->data);
                 message(end->reason == MPV_END_FILE_REASON_ERROR ? mpv_error_string(end->error) : "Playback ended");
@@ -549,6 +563,10 @@ public:
 };
 }
 GtkWidget* createPlayerView() { return (new PlayerView())->root; }
+void setPlayerPlaybackCallback(GtkWidget* player, std::function<void(const std::string&)> callback) {
+    auto* controller = static_cast<PlayerView*>(g_object_get_data(G_OBJECT(player), "player-controller"));
+    if (controller) controller->playbackStarted = std::move(callback);
+}
 void setPlayerFullscreen(GtkWidget* player, bool fullscreen) {
     auto* controller = static_cast<PlayerView*>(g_object_get_data(G_OBJECT(player), "player-controller"));
     if (controller) controller->setFullscreen(fullscreen);

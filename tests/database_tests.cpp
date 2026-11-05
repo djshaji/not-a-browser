@@ -71,7 +71,60 @@ int main() {
             streamgallery::LibraryRepository library(db);
             check(library.videos().size()==1);
             check(library.videos()[0].title=="Other");
-            check(scalar(db,"PRAGMA user_version")==2);
+            check(scalar(db,"PRAGMA user_version")==3);
+        }
+        const auto historyPath = path.parent_path() / "history.db";
+        {
+            streamgallery::Database db(historyPath.string());
+            streamgallery::LibraryRepository library(db);
+            using streamgallery::VideoSort;
+            auto first = library.bookmark("https://example.com/first", "First concert");
+            auto second = library.bookmark("https://example.com/second", "Second concert");
+            library.bookmark("https://example.com/unplayed", "Unplayed");
+            check(library.page("",VideoSort::Recent,0).total == 0);
+            check(!library.recordPlayback("https://example.com/unsaved",100));
+            check(library.recordPlayback("HTTPS://EXAMPLE.COM:443/first#player",100));
+            check(library.recordPlayback(second.canonicalUrl,200));
+            check(library.recordPlayback(first.canonicalUrl,300));
+            check(library.recordPlayback(first.canonicalUrl,50)); // Late worker cannot move history backward.
+            auto recent = library.page("",VideoSort::Recent,0,1);
+            check(recent.total == 2 && recent.items[0].id == first.id && recent.items[0].lastPlayedAt == 300);
+            check(library.page("",VideoSort::Recent,1,1).items[0].id == second.id);
+            library.updateBookmark(first.id,"Edited concert","Description",{"Live"},std::vector<std::string>{"Music"});
+            check(library.page("Edited",VideoSort::Recent,0,24,"Live","Music").total == 1);
+            check(library.page("Edited",VideoSort::Recent,0,24,"Missing","Music").total == 0);
+            check(library.bookmark(first.canonicalUrl,"Duplicate").lastPlayedAt == 300);
+            auto removed = library.removeBookmark(first.id);
+            check(library.page("",VideoSort::Recent,0).total == 1);
+            library.restoreBookmark(removed);
+            check(library.page("",VideoSort::Recent,0).items[0].lastPlayedAt == 300);
+            // Stable tie ordering and bounded pagination.
+            library.recordPlayback(second.canonicalUrl,300);
+            check(library.page("",VideoSort::Recent,0).items[0].id == second.id);
+            bool invalid = false;
+            try { library.recordPlayback(first.canonicalUrl,0); } catch (const std::invalid_argument&) { invalid = true; }
+            check(invalid);
+        }
+        {
+            streamgallery::Database db(historyPath.string());
+            streamgallery::LibraryRepository library(db);
+            check(library.page("",streamgallery::VideoSort::Recent,0).total == 2);
+            check(library.page("",streamgallery::VideoSort::Recent,0).items[0].lastPlayedAt == 300);
+        }
+        // A version-2 library upgrades without inventing history or losing metadata.
+        {
+            streamgallery::Database db(historyPath.string());
+            db.execute("DROP INDEX idx_videos_recent");
+            db.execute("ALTER TABLE videos DROP COLUMN last_played_at");
+            db.execute("PRAGMA user_version=2");
+        }
+        {
+            streamgallery::Database db(historyPath.string());
+            streamgallery::LibraryRepository library(db);
+            check(scalar(db,"PRAGMA user_version") == 3);
+            check(library.videos().size() == 3);
+            check(library.page("",streamgallery::VideoSort::Recent,0).total == 0);
+            check(library.page("Edited",streamgallery::VideoSort::Newest,0,24,"Live","Music").total == 1);
         }
         const auto savedPath = path.parent_path() / "saved.db";
         {
@@ -307,7 +360,7 @@ int main() {
             streamgallery::LibraryRepository library(migrated);
             check(library.videos()[0].title == "Legacy");
             check(library.videos()[0].thumbnailUrl.empty());
-            check(scalar(migrated,"PRAGMA user_version") == 2);
+            check(scalar(migrated,"PRAGMA user_version") == 3);
             check(scalar(migrated,"SELECT count(*) FROM video_folders WHERE video_id=1 AND folder_id=1") == 1);
             check(scalar(migrated,"SELECT count(*) FROM video_tags WHERE video_id=1 AND tag_id=1") == 1);
         }

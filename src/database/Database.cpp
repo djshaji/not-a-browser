@@ -17,7 +17,7 @@ Database::Database(const std::string& path) {
         const int result = sqlite3_step(version);
         const int current = result == SQLITE_ROW ? sqlite3_column_int(version, 0) : -1;
         sqlite3_finalize(version);
-        if (current < 0 || current > 2) throw std::runtime_error("Unsupported library schema version");
+        if (current < 0 || current > 3) throw std::runtime_error("Unsupported library schema version");
         if (current == 0) {
             execute(R"SQL(
 CREATE TABLE videos(id INTEGER PRIMARY KEY, canonical_url TEXT NOT NULL UNIQUE,
@@ -45,6 +45,11 @@ PRAGMA user_version=1;
             execute("ALTER TABLE videos ADD COLUMN thumbnail_url TEXT NOT NULL DEFAULT ''");
             execute("CREATE INDEX IF NOT EXISTS idx_videos_title ON videos(title COLLATE NOCASE, id)");
             execute("PRAGMA user_version=2");
+        }
+        if (current < 3) {
+            execute("ALTER TABLE videos ADD COLUMN last_played_at INTEGER NOT NULL DEFAULT 0");
+            execute("CREATE INDEX idx_videos_recent ON videos(last_played_at DESC, id DESC)");
+            execute("PRAGMA user_version=3");
         }
         execute("COMMIT");
     } catch (...) { sqlite3_close(connection); connection = nullptr; throw; }

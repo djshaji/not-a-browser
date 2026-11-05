@@ -12,8 +12,8 @@ until implemented and validated.
 | Area | Implemented behavior |
 | --- | --- |
 | Application | Native window, resizable sidebar, Library/Discover/Player/Files navigation, session theme switch, and keyboard shortcuts. |
-| Library | SQLite schema version 2, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, asynchronous selected-bookmark metadata/tag/top-level folder editing, and removal with session Undo. |
-| Gallery | Grid/list views, selection, title/description prefix search, exact-name single-tag and top-level folder filters, sorting, 24-item pagination, asynchronous queries, and bounded thumbnail caching. |
+| Library | SQLite schema version 3, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, asynchronous selected-bookmark metadata/tag/top-level folder editing, and removal with session Undo. |
+| Gallery | Grid/list views, selection, title/description prefix search, exact-name single-tag and top-level folder filters, sorting, persisted Recent playback history for saved bookmarks, 24-item pagination, asynchronous queries, and bounded thumbnail caching. |
 | Playback | GtkGLArea/libmpv rendering, local files and direct media URLs, muted startup, seeking, reverse/forward 2×, speed controls, fullscreen, EOF/replay, and mpv resume files. |
 | Files | Native local file chooser, video/all-file filters, playback activation, and session folder/selection restoration across page switches. Browsing remains available without playback. |
 | Video-page discovery | WebKit DOM extraction, title/poster metadata, bounded native HLS verification, stream selection, automatic playback, cancellation, and asynchronous explicit library saves. |
@@ -25,8 +25,7 @@ Bookmark metadata, tags, top-level folder assignments, combined filters, and
 removal with one session Undo slot are implemented. Nested-folder editing remains
 planned; existing nested assignments are preserved. The `Video` model and
 repository queries expose descriptions, assigned tags, and top-level folder names;
-metadata updates maintain FTS through existing triggers. Playback resume currently
-belongs to libmpv; there is no library-level Recent/history workflow.
+metadata updates maintain FTS through existing triggers. Playback resume belongs to libmpv. Recent records each saved bookmark’s latest successful video-page playback; local files and unsaved pages are excluded.
 
 ## Architecture and boundaries
 
@@ -84,7 +83,7 @@ The Library management milestone consists of these implemented slices:
    The exact-name Folder filter composes with Tag, text search, sorting, and
    pagination, and matches roots only. Undo restores all folder relationships.
 
-These slices use schema version 2 without an additional migration. Global tag
+These management slices originally used schema version 2; playback history now adds schema version 3. Global tag
 renaming/deletion, choosers, folder trees, folder rename/deletion, and multiple-tag
 filters remain unimplemented. Keep repository queries and rendered gallery pages bounded; introduce transactional, versioned
 migrations only when storage changes are required.
@@ -127,13 +126,21 @@ profile's supported layouts and limits. The two bundled profiles currently targe
 fixture layouts; arbitrary websites are not automatically supported. Site choice
 and expected behavior must be established before implementation.
 
-### Playback history and Recent
+### Playback history and Recent (implemented)
 
-Associate playback with durable bookmark identity, record last-played time, and
-expose a Recent view. Define the handling of local files and unsaved discoveries.
-If adding library-level resume, distinguish it from existing mpv watch-later
-files and account for expiring stream URLs. Add schema migrations and tests only
-once the persistence contract is defined.
+Schema version 3 adds a UTC microsecond last-played timestamp and index. Library's
+Recent dropdown entry shows played bookmarks ordered by timestamp, then descending
+ID for ties; existing search/tag/folder predicates and bounded pagination apply.
+Successful libmpv file loading from video-page discovery records the durable page
+URL in a database worker and refreshes the gallery through its lifetime guard.
+Unsuccessful loads, direct media playback, local files, and unsaved pages do not
+create entries. Late writes cannot replace newer timestamps. Removal and Undo
+preserve the timestamp in the transactional snapshot. History survives restart;
+existing libraries migrate with no invented playback history. Pausing and replay
+within the loaded file do not update the timestamp. Resume remains owned by mpv.
+
+Future slices may define history for local files or unsaved discoveries, expose
+playback times in cards, or add library-level resume with expiring-stream handling.
 
 ### Nested folder organization and richer metadata
 

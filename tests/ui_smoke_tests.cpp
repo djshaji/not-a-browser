@@ -456,6 +456,50 @@ int main(int argc, char** argv) {
         waitFor([&] { return g_strcmp0(gtk_button_get_label(playPause), "Pause") == 0; });
         waitFor([&] { return g_strcmp0(gtk_button_get_label(playPause), "Replay") == 0; });
         g_assert_true(gtk_widget_get_sensitive(seek));
+#ifdef HAVE_LIBRARY_TESTS
+        // Discovery's durable page is recorded only after the media loads.
+        const std::string historyUrl = "https://example.com/history-playback";
+        {
+            streamgallery::Database db((libraryDirectory / "library.db").string());
+            streamgallery::LibraryRepository(db).bookmark(historyUrl,"History playback");
+        }
+        streamgallery::openPlayerStream(playerView, "/nonexistent/stream-gallery-history.y4m", historyUrl.c_str(), "StreamGallery/Test");
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(playerStatus), "Loading…") != 0; });
+        {
+            streamgallery::Database db((libraryDirectory / "library.db").string());
+            g_assert_cmpint(streamgallery::LibraryRepository(db).page("",streamgallery::VideoSort::Recent,0).total, ==, 0);
+        }
+        streamgallery::openPlayerStream(playerView, fixture, historyUrl.c_str(), "StreamGallery/Test");
+        waitFor([&] {
+            streamgallery::Database db((libraryDirectory / "library.db").string());
+            return streamgallery::LibraryRepository(db).page("History playback",streamgallery::VideoSort::Recent,0).total == 1;
+        });
+        gtk_stack_set_visible_child_name(stack, "gallery");
+        gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-search")), "History playback");
+        gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-tag-filter")), "");
+        gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-folder-filter")), "");
+        gtk_combo_box_set_active(GTK_COMBO_BOX(findNamed(window,"library-sort")),3);
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "1–1 of 1 videos") == 0; });
+        if (const char* screenshot = g_getenv("STREAM_GALLERY_RECENT_SCREENSHOT")) {
+            waitFor([&] { return !gtk_stack_get_transition_running(stack); });
+            gtk_test_widget_wait_for_draw(window);
+            // Render the widget directly: Xvfb's screen may be smaller than the window.
+            auto* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                gtk_widget_get_allocated_width(window),gtk_widget_get_allocated_height(window));
+            auto* context = cairo_create(surface);
+            gtk_widget_draw(window,context);
+            g_assert_cmpint(cairo_surface_write_to_png(surface,screenshot), ==, CAIRO_STATUS_SUCCESS);
+            cairo_destroy(context);
+            cairo_surface_destroy(surface);
+        }
+        {
+            streamgallery::Database db((libraryDirectory / "library.db").string());
+            streamgallery::LibraryRepository library(db);
+            auto recent = library.page("History playback",streamgallery::VideoSort::Recent,0);
+            library.removeBookmark(recent.items[0].id);
+        }
+        gtk_stack_set_visible_child_name(stack, "player");
+#endif
         // A seekable ten-minute fixture verifies the new transport controls.
         std::string longVideo = "YUV4MPEG2 W16 H16 F2:1 Ip A1:1 C420jpeg\n";
         for (int frame = 0; frame < 1200; ++frame)

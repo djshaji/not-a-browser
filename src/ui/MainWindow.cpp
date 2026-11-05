@@ -3,6 +3,7 @@
 #include <utility>
 #ifdef HAVE_LIBRARY
 #include "ui/GalleryView.hpp"
+#include "services/BookmarkService.hpp"
 #endif
 
 #ifdef HAVE_PLAYER
@@ -126,6 +127,11 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     gtk_widget_set_halign(GTK_WIDGET(player), GTK_ALIGN_FILL);
     gtk_widget_set_valign(GTK_WIDGET(player), GTK_ALIGN_FILL);
     auto* playerView = createPlayerView();
+#ifdef HAVE_LIBRARY
+    setPlayerPlaybackCallback(playerView, [refresh = galleryRefreshCallback(galleryView)](const std::string& page) {
+        recordPlaybackAsync(page, refresh);
+    });
+#endif
     g_object_set_data(G_OBJECT(window), "player-view", playerView);
     gtk_box_pack_start(player, playerView, TRUE, TRUE, 0);
     // Run before GtkWindow forwards keys to the focused child.
