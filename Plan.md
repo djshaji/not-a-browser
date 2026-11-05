@@ -59,35 +59,34 @@ file, 64 custom listing profiles, five pages/batches, 120 total cards, and at mo
 
 The Library management milestone consists of these implemented slices:
 
-1. **Edit metadata (implemented).** The first slice adds an editor for the selected bookmark's title and
+1. **Edit metadata.** The editor updates the selected bookmark's title and
    description. The model/repository read and update descriptions.
    The canonical URL and bookmark identity stay stable. The gallery refreshes after
    success and FTS results reflect edits.
-2. **Remove with Undo (implemented).** Removal captures metadata, saved timestamp,
+2. **Remove with Undo.** Removal captures metadata, saved timestamp,
    and folder/tag relationships and deletes the record in one transaction. One
    in-memory Undo slot lasts until the next successful removal or gallery/window
    destruction. Undo restores the snapshot transactionally. Duplicate URLs and
    missing relationships fail without partial changes, retaining the snapshot for
    retry. Reuse the original record ID when free; allocate a new ID if occupied,
    which can change newest/oldest ordering. Removal never deletes a media file.
-3. **Assign and filter tags (implemented).** The existing editor shows assigned
+3. **Assign and filter tags.** The existing editor shows assigned
    tags one per line. Save creates names and replaces assignments atomically with
    metadata updates; removing a line unassigns it without deleting the global tag.
    Trim surrounding spaces, ignore blank lines, and deduplicate repeated names.
    The gallery's exact-name, case-sensitive tag field composes with text search,
    sorting, counts, and pagination. Changing filters resets the page, and a save
    that removes the active tag refreshes the results. Undo restores assignments.
-
-4. **Top-level folders (implemented).** The editor creates and assigns folders
+4. **Top-level folders.** The editor creates and assigns folders
    from one name per line; deleting a line unassigns that top-level name. Save
    metadata, tags, and folder assignments together, preserving nested assignments.
    Reuse existing roots by name; preserve retained duplicate-name memberships.
    The exact-name Folder filter composes with Tag, text search, sorting, and
    pagination, and matches roots only. Undo restores all folder relationships.
 
-These slices use schema version 2 without a migration. Global tag renaming/deletion,
-choosers, folder trees and folder rename/deletion, and multiple-tag filters remain unimplemented. Keep repository
-queries and rendered gallery pages bounded; introduce transactional, versioned
+These slices use schema version 2 without an additional migration. Global tag
+renaming/deletion, choosers, folder trees, folder rename/deletion, and multiple-tag
+filters remain unimplemented. Keep repository queries and rendered gallery pages bounded; introduce transactional, versioned
 migrations only when storage changes are required.
 
 All writes run in database workers. Capture the selected record's identity at
@@ -95,7 +94,7 @@ action time, disable conflicting pending actions, and guard callbacks against
 selection changes and destroyed widgets. Preserve existing metadata on duplicate
 imports and finish initiated saves across navigation.
 
-Acceptance criteria:
+Regression requirements:
 
 - Edited title/description survive restart and appear correctly in search.
 - Removal updates counts and pagination; Undo restores metadata and relationships.
@@ -104,10 +103,18 @@ Acceptance criteria:
 - Navigation and destruction during pending work cannot apply stale UI updates.
 - Existing discovery, file browsing, playback, and duplicate-save behavior remain intact.
 
-Validation: extend database and UI smoke tests with persistence, FTS updates,
-relationship restoration, Undo conflicts, filter pagination, and asynchronous
-lifetime cases. Run the relevant CTest checks and manually inspect the editor,
-removal/Undo feedback, and tag controls. Use temporary XDG directories.
+Validation: database and UI smoke tests cover persistence, FTS updates,
+transactional edits and rollback, folder reuse, nested/duplicate-name memberships,
+combined filters, removal/Undo conflicts, and asynchronous lifetimes. For changes
+to these workflows, run:
+
+```sh
+ctest --test-dir build -R '^(database|ui-smoke)$' --output-on-failure
+```
+
+Manually inspect editor fields, filter results, and removal/Undo feedback. Use
+temporary XDG directories. Run the full suite when shared model/repository changes
+affect discovery or listing saves.
 
 ## Following milestones
 
@@ -132,8 +139,7 @@ once the persistence contract is defined.
 
 Top-level folder assignment and filtering are implemented. Consider nested
 folder management, a folder tree/chooser, folder rename/deletion, favorites,
-saved collections, and export/import. Add duration
-or other metadata only with a reliable extraction source and clear update rules.
+saved collections, and export/import. Add duration or other metadata only with a reliable extraction source and clear update rules.
 Preserve user edits when refreshing discovered metadata.
 
 ### Discovery expansion
@@ -158,5 +164,6 @@ visible UI changes; and update README.md with actual behavior. Keep this roadmap
 current as milestones land. Do not present planned controls as working features.
 
 Use the build and test commands in README.md and the feature-specific validation
-rules in AGENTS.md. The bookmark management slices are implemented. Choose the next development
-slice from the following milestones according to the workflow being improved.
+rules in AGENTS.md. Bookmark management and top-level folder organization are
+implemented. Further work should select one of the milestones above; no real
+website profile can be scoped until the target site and expected workflow are chosen.

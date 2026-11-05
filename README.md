@@ -107,15 +107,50 @@ URL normalization handles scheme/host casing, default ports, empty paths, and fr
 
 ## Browse the library
 
-1. Add bookmarks through the CLI, then open Library and press **Refresh**.
-2. Choose **Grid** or **List**, and sort by newest, oldest, or title.
-3. Enter search terms to match title/description prefixes. Multiple terms must all match; FTS operators are not exposed. Enter one exact, case-sensitive tag name in **Tag** to combine it with the text search. Surrounding spaces are trimmed; clear Tag to remove the tag restriction. Enter an exact, case-sensitive top-level folder name in **Folder** to intersect it with search and Tag. Empty fields impose no restriction; changing either filter resets pagination. Nested-folder contents are not included by the folder filter.
-4. Use **Previous** and **Next** to browse 24 records per page.
-5. Select a card to display its page URL. Choose **Edit selected** to change its title, description, and tags, then **Save**. Enter tags one per line; saving creates new names and assigns them. Blank lines are ignored and repeated names are deduplicated after trimming surrounding spaces. Spaces and commas inside a name are literal. Remove a line to unassign that tag, or clear the field to remove all assignments. This leaves the tag available for other bookmarks. Metadata, tag, and top-level folder changes save together in one database transaction in the background and refresh the gallery and search results. The page URL and thumbnail stay unchanged; Cancel discards unsaved edits. An initiated save continues if you switch pages. Errors stay in the editor so you can retry.
-6. In **Edit selected → Folders**, enter top-level folder names one per line. Saving creates missing folders and assigns the bookmark to them. Names are case-sensitive; surrounding spaces and blank lines are ignored, and duplicate names do not create duplicate assignments. Remove a line to unassign a folder, or clear the field to remove all top-level assignments. Nested-folder assignments stay intact. Existing duplicate-named top-level folders match the same filter; retained memberships are preserved, and new assignments use the oldest matching folder. Folders are library collections, separate from directories in Files.
-7. Choose **Remove selected** to remove a bookmark from Library. **Undo removal** restores its title, description, thumbnail, saved timestamp, and folder/tag relationships. One Undo is kept for the current session, until another removal succeeds or the application closes. Switching pages, searching, and Refresh retain it. Removing a bookmark does not delete media files.
-8. If the same URL was saved again, Undo reports a conflict and preserves the existing bookmark and the Undo snapshot. Missing folders/tags also prevent restoration; failures leave the database unchanged and Undo available. The original record ID is reused when free; if another bookmark has reused it, restoration allocates a new ID and its position in newest/oldest sorting may change.
-9. Choose **Discover & Play selected** to load the selected page in WebKit and look for a playable HLS stream.
+Open **Library** to browse saved bookmarks. Press **Refresh** after adding records
+through the CLI or another application; saves made in Discover refresh it automatically.
+
+- Choose **Grid** or **List**, then sort by newest, oldest, or title.
+- Search matches title/description prefixes. Multiple terms must all match; FTS operators are not exposed.
+- **Tag** and **Folder** accept one exact, case-sensitive name each. They intersect with text search and each other. Surrounding spaces are trimmed; an empty field adds no restriction. Folder matches top-level memberships only, without including nested-folder contents.
+- Changing search or either filter resets pagination. **Previous** and **Next** browse 24 records per page.
+- Select a card to display its page URL. **Discover & Play selected** loads that durable webpage and looks for HLS streams.
+
+### Edit metadata and assignments
+
+Select a bookmark and choose **Edit selected**. Change its title, description,
+tags, and top-level folders, then choose **Save**. All changes save together in
+one background database transaction, then refresh the current gallery/search
+results. The page URL and thumbnail stay unchanged. **Cancel** discards unsaved
+edits. An initiated save continues across page navigation; errors remain in the
+editor for retry.
+
+Enter tags and folders one per line. Saving creates missing names and assigns
+them. Blank lines are ignored, surrounding spaces are trimmed, and repeated names
+do not create duplicate assignments. Names are case-sensitive; spaces and commas
+inside a name are literal. Remove a line to unassign it, or clear a field to remove
+all its assignments. Unassignment keeps the global tag/folder record.
+
+Folder editing affects top-level memberships only and preserves existing nested
+assignments. For duplicate-named top-level folders, retained memberships are
+preserved, new assignments use the oldest matching folder, and the Folder filter
+matches all roots with that name. Library folders are collections; they do not
+create or modify directories in Files. Folder trees, rename/delete actions, and
+folder/tag choosers are not available yet.
+
+### Remove and Undo
+
+Choose **Remove selected** to remove a bookmark from Library. **Undo removal**
+restores its title, description, thumbnail, saved timestamp, and folder/tag
+relationships. One Undo is retained until another removal succeeds or the
+application closes. Navigation, search, filters, and Refresh retain it. Removing
+a bookmark never deletes media files.
+
+If the same URL was saved again, Undo reports a conflict and keeps the existing
+bookmark and Undo snapshot. Missing folders/tags also prevent restoration.
+Failures leave the database unchanged and Undo available. Restoration reuses the
+original record ID when free; otherwise it allocates a new ID, which may change
+the bookmark's position in newest/oldest sorting.
 
 Thumbnail decoding and database access run outside the GTK main thread. Only the current page's images are requested. Thumbnails are scaled within 192 × 108 pixels, with a disk cache capped at 256 entries. Downloads have a 10-second session timeout and a 5 MiB input limit. Missing or invalid images retain a generic video icon.
 
@@ -171,7 +206,7 @@ Single-key shortcuts work throughout the main window and in fullscreen when focu
 | Browser website data | `$XDG_DATA_HOME/stream-gallery/browser/` | `~/.local/share/stream-gallery/browser/` |
 | Browser cache | `$XDG_CACHE_HOME/stream-gallery/browser/` | `~/.cache/stream-gallery/browser/` |
 
-Schema version 2 adds thumbnail URLs and a title-sort index. Existing version-1 databases migrate automatically while preserving bookmarks, folders, tags, and relationships. Use temporary XDG directories when experimenting with disposable data.
+The current schema is version 2, which adds thumbnail URLs and a title-sort index. Metadata/tag/folder editing and Undo use this schema without an additional migration. Existing version-1 databases migrate automatically while preserving bookmarks, folders, tags, and relationships. Use temporary XDG directories when experimenting with disposable data.
 
 ## Tests
 
@@ -199,7 +234,7 @@ UI tests use Adwaita and treat GTK warnings as failures. CMake runs them through
 
 For manual validation:
 
-1. Add bookmarks, search, switch views, resize the window/sidebar, and toggle the theme. Edit a bookmark and assign tags, filter by one tag with text search, then remove an assignment and check the filtered result disappears. Remove/Undo a bookmark and confirm tags return. Restart and confirm edits and tags persist.
+1. Add bookmarks, search, switch views, resize the window/sidebar, and toggle the theme. Edit a bookmark and assign tags, filter by one tag with text search, then remove an assignment and check the filtered result disappears. Remove/Undo a bookmark and confirm tags return. Assign a top-level folder and combine its filter with Tag and search. Unassign it while filtered and confirm the result disappears; Undo a removal and confirm folder memberships return. Restart and confirm metadata and assignments persist.
 2. Add more than 24 records to exercise pagination and supply an image URL to check thumbnails.
 3. Open a local video. Check muted startup, volume, ±5-minute seeking, reverse/forward 2× toggles, speed selection, fullscreen, EOF retention, and replay.
 4. Use **Discover → Load & Play** with a page exposing an `.m3u8` URL in its DOM. Check automatic native playback and **Stop loading**.
