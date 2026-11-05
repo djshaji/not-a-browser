@@ -10,6 +10,7 @@ struct Video {
     std::string thumbnailUrl;
     std::string description;
     std::vector<std::string> tags = {};
+    std::vector<std::string> rootFolders = {};
 };
 struct Folder {
     std::int64_t id = 0;

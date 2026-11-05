@@ -176,6 +176,62 @@ int main() {
             check(library.videoTags(page.items[0].id).empty());
             check(library.videos().size() == 31);
         }
+        const auto foldersPath = path.parent_path() / "folders.db";
+        {
+            streamgallery::Database db(foldersPath.string());
+            streamgallery::LibraryRepository library(db);
+            std::vector<std::int64_t> ids;
+            for (int index = 0; index < 30; ++index) {
+                auto video = library.bookmark("https://example.com/folder/" + std::to_string(index), "Folder video " + std::to_string(index));
+                ids.push_back(video.id);
+                library.updateBookmark(video.id, video.title, "Folder description", {"Shared tag"},
+                    std::vector<std::string>{" Collection ", "Collection", "संग्रह"});
+            }
+            check(scalar(db,"SELECT count(*) FROM folders") == 2);
+            check(library.videoRootFolders(ids[0]).size() == 2);
+            auto last = library.page("description", streamgallery::VideoSort::Oldest, 24, 24, "Shared tag", " Collection ");
+            check(last.total == 30 && last.items.size() == 6 && last.items.front().id == ids[24]);
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 1, "", "Collection").items[0].id == ids.back());
+            check(library.page("", streamgallery::VideoSort::Title, 0, 1, "", "Collection").items[0].title == "Folder video 0");
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "Missing", "Collection").total == 0);
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "", "collection").total == 0);
+            check(library.page("", streamgallery::VideoSort::Newest, 0, 24, "", "' OR 1=1 --").total == 0);
+            auto parent = library.createFolder("Parent");
+            auto nested = library.createFolder("Collection", parent.id);
+            auto duplicate = library.createFolder("Collection");
+            library.addToFolder(ids[0], nested.id);
+            library.addToFolder(ids[0], duplicate.id);
+            library.updateBookmark(ids[0], "Edited folder", "Folder description", {"Shared tag"}, std::vector<std::string>{"Collection"});
+            check(scalar(db,"SELECT count(*) FROM video_folders WHERE video_id=1") == 3);
+            check(library.videoRootFolders(ids[0]).size() == 1);
+            // Metadata/tag-only callers preserve all existing folder links.
+            library.updateBookmark(ids[0], "Edited folder", "Folder description", {"Shared tag"});
+            check(scalar(db,"SELECT count(*) FROM video_folders WHERE video_id=1") == 3);
+            bool rejected = false;
+            try { library.updateBookmark(ids[0], "Must roll back", "", {"New rollback tag"},
+                std::vector<std::string>{"New rollback folder", "  "}); }
+            catch (const std::invalid_argument&) { rejected = true; }
+            check(rejected && scalar(db,"SELECT count(*) FROM folders WHERE name='New rollback folder'") == 0);
+            check(scalar(db,"SELECT count(*) FROM tags WHERE name='New rollback tag'") == 0);
+            check(library.page("Edited", streamgallery::VideoSort::Newest, 0, 24, "Shared tag", "Collection").total == 1);
+            library.updateBookmark(ids[0], "Edited folder", "Folder description", {"Shared tag"}, std::vector<std::string>{});
+            check(library.videoRootFolders(ids[0]).empty());
+            check(scalar(db,"SELECT count(*) FROM video_folders WHERE video_id=1") == 1);
+            check(library.page("Edited", streamgallery::VideoSort::Newest, 0, 24, "", "Collection").total == 0);
+            library.updateBookmark(ids[0], "Edited folder", "Folder description", {"Shared tag"}, std::vector<std::string>{"Collection"});
+            auto removed = library.removeBookmark(ids[0]);
+            library.restoreBookmark(removed);
+            check(library.page("Edited", streamgallery::VideoSort::Newest, 0, 24, "Shared tag", "Collection").total == 1);
+        }
+        {
+            streamgallery::Database db(foldersPath.string());
+            streamgallery::LibraryRepository library(db);
+            auto page = library.page("Edited", streamgallery::VideoSort::Newest, 0, 24, "Shared tag", "Collection");
+            check(page.total == 1 && page.items[0].rootFolders == std::vector<std::string>{"Collection"});
+            auto duplicate = library.bookmarkWithStatus(page.items[0].canonicalUrl, "Replacement");
+            check(!duplicate.created && duplicate.video.rootFolders == page.items[0].rootFolders);
+            check(scalar(db,"SELECT count(*) FROM video_folders WHERE video_id=1") == 2);
+        }
         const auto removalPath = path.parent_path() / "removal.db";
         streamgallery::RemovedBookmark snapshot;
         {

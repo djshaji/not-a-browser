@@ -21,6 +21,8 @@ struct Gallery {
     GtkWidget* descriptionView = nullptr;
     GtkWidget* tagsView = nullptr;
     GtkWidget* tagFilter = nullptr;
+    GtkWidget* foldersView = nullptr;
+    GtkWidget* folderFilter = nullptr;
     GtkWidget* editStatus = nullptr;
     bool saving = false;
     bool changing = false;
@@ -40,7 +42,7 @@ using GalleryPtr = std::shared_ptr<Gallery>;
 struct Query {
     GalleryPtr gallery;
     unsigned generation;
-    std::string path, search, tag;
+    std::string path, search, tag, folder;
     VideoSort sort;
     int offset;
 };
@@ -115,8 +117,9 @@ void render(const GalleryPtr& state) {
     gtk_widget_show_all(state->flow);
     std::string message;
     if (state->page.total == 0) {
-        if (*gtk_entry_get_text(GTK_ENTRY(state->search)) || *gtk_entry_get_text(GTK_ENTRY(state->tagFilter)))
-            message = "No videos found. Clear the search or tag filter, or add bookmarks.";
+        if (*gtk_entry_get_text(GTK_ENTRY(state->search)) || *gtk_entry_get_text(GTK_ENTRY(state->tagFilter)) ||
+            *gtk_entry_get_text(GTK_ENTRY(state->folderFilter)))
+            message = "No videos found. Clear the search, tag, or folder filter, or add bookmarks.";
         else {
 #ifdef HAVE_DISCOVERY
             message = "No videos found. Save a page from Discover, or add CLI bookmarks and press Refresh.";
@@ -138,7 +141,7 @@ void queryWorker(GTask* task, gpointer, gpointer data, GCancellable* cancellable
         std::filesystem::create_directories(std::filesystem::path(query->path).parent_path());
         Database database(query->path);
         LibraryRepository library(database);
-        auto result = std::make_unique<VideoPage>(library.page(query->search,query->sort,query->offset,pageSize,query->tag));
+        auto result = std::make_unique<VideoPage>(library.page(query->search,query->sort,query->offset,pageSize,query->tag,query->folder));
         if (g_cancellable_is_cancelled(cancellable)) { g_task_return_error_if_cancelled(task); return; }
         g_task_return_pointer(task,result.release(),[](gpointer data) { delete static_cast<VideoPage*>(data); });
     } catch (const std::exception& error) {
@@ -176,6 +179,7 @@ void loadPage(const GalleryPtr& state) {
     auto* query = new Query{state,state->generation,path.string(),
         gtk_entry_get_text(GTK_ENTRY(state->search)),
         gtk_entry_get_text(GTK_ENTRY(state->tagFilter)),
+        gtk_entry_get_text(GTK_ENTRY(state->folderFilter)),
         static_cast<VideoSort>(gtk_combo_box_get_active(GTK_COMBO_BOX(state->sort))),state->offset};
     auto* task = g_task_new(nullptr,state->cancellable,queryReady,nullptr);
     g_task_set_task_data(task,query,[](gpointer data) { delete static_cast<Query*>(data); });
@@ -204,13 +208,13 @@ struct EditRequest {
     GalleryPtr gallery;
     std::int64_t id;
     std::string path, title, description;
-    std::vector<std::string> tags;
+    std::vector<std::string> tags, rootFolders;
 };
 void editWorker(GTask* task, gpointer, gpointer data, GCancellable*) {
     auto* request = static_cast<EditRequest*>(data);
     try {
         Database database(request->path);
-        LibraryRepository(database).updateBookmark(request->id, request->title, request->description, request->tags);
+        LibraryRepository(database).updateBookmark(request->id, request->title, request->description, request->tags, request->rootFolders);
         g_task_return_boolean(task, TRUE);
     } catch (const std::exception& error) {
         g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s", error.what());
@@ -228,6 +232,7 @@ void editReady(GObject*, GAsyncResult* result, gpointer) {
             gtk_widget_set_sensitive(state->titleEntry, TRUE);
             gtk_widget_set_sensitive(state->descriptionView, TRUE);
             gtk_widget_set_sensitive(state->tagsView, TRUE);
+            gtk_widget_set_sensitive(state->foldersView, TRUE);
             gtk_dialog_set_response_sensitive(GTK_DIALOG(state->editor), GTK_RESPONSE_ACCEPT, TRUE);
         } else {
             gtk_widget_destroy(state->editor);
@@ -252,7 +257,7 @@ void editSelected(GtkButton*, gpointer data) {
         static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
         "Cancel", GTK_RESPONSE_CANCEL, "Save", GTK_RESPONSE_ACCEPT, nullptr);
     gtk_widget_set_name(state->editor, "library-editor");
-    gtk_window_set_default_size(GTK_WINDOW(state->editor), 480, 480);
+    gtk_window_set_default_size(GTK_WINDOW(state->editor), 480, 600);
     auto* content = gtk_dialog_get_content_area(GTK_DIALOG(state->editor));
     gtk_container_set_border_width(GTK_CONTAINER(content), 12);
     gtk_box_set_spacing(GTK_BOX(content), 8);
@@ -283,6 +288,20 @@ void editSelected(GtkButton*, gpointer data) {
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tagsScroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_widget_set_size_request(tagsScroll, -1, 96);
     gtk_container_add(GTK_CONTAINER(tagsScroll), state->tagsView);
+    auto* foldersLabel = gtk_label_new("Folders (top level, one per line)");
+    state->foldersView = gtk_text_view_new();
+    gtk_widget_set_name(state->foldersView, "library-edit-folders");
+    atk_object_set_name(gtk_widget_get_accessible(state->foldersView), "Bookmark top-level folders, one per line");
+    gtk_widget_set_tooltip_text(state->foldersView, "New names create folders. Remove a line to unassign. Nested assignments are preserved.");
+    std::string folderText;
+    for (const auto& folder : video.rootFolders) {
+        if (!folderText.empty()) folderText += '\n';
+        folderText += folder;
+    }
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(state->foldersView)), folderText.c_str(), -1);
+    auto* foldersScroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_widget_set_size_request(foldersScroll, -1, 80);
+    gtk_container_add(GTK_CONTAINER(foldersScroll), state->foldersView);
     state->editStatus = gtk_label_new("");
     gtk_label_set_line_wrap(GTK_LABEL(state->editStatus), TRUE);
     for (auto* widget : {titleLabel, state->titleEntry, descriptionLabel})
@@ -290,10 +309,12 @@ void editSelected(GtkButton*, gpointer data) {
     gtk_box_pack_start(GTK_BOX(content), scroll, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(content), tagsLabel, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(content), tagsScroll, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(content), foldersLabel, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), foldersScroll, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(content), state->editStatus, FALSE, FALSE, 0);
     g_object_set_data_full(G_OBJECT(state->editor), "edit-request",
         new EditRequest{state, video.id,
-            (std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db").string(), {}, {}, {}},
+            (std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db").string(), {}, {}, {}, {}},
         [](gpointer request) { delete static_cast<EditRequest*>(request); });
     g_signal_connect(state->editor, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer data) {
         auto* state = static_cast<Gallery*>(data);
@@ -322,10 +343,20 @@ void editSelected(GtkButton*, gpointer data) {
             if (*lines[index]) request->tags.emplace_back(lines[index]);
         }
         g_strfreev(lines); g_free(tagText);
+        auto* folderBuffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(state->foldersView));
+        gtk_text_buffer_get_bounds(folderBuffer, &start, &end);
+        gchar* folderText = gtk_text_buffer_get_text(folderBuffer, &start, &end, FALSE);
+        lines = g_strsplit(folderText, "\n", -1);
+        for (int index = 0; lines[index]; ++index) {
+            g_strstrip(lines[index]);
+            if (*lines[index]) request->rootFolders.emplace_back(lines[index]);
+        }
+        g_strfreev(lines); g_free(folderText);
         state->saving = true;
         gtk_widget_set_sensitive(state->titleEntry, FALSE);
         gtk_widget_set_sensitive(state->descriptionView, FALSE);
         gtk_widget_set_sensitive(state->tagsView, FALSE);
+        gtk_widget_set_sensitive(state->foldersView, FALSE);
         gtk_dialog_set_response_sensitive(dialog, GTK_RESPONSE_ACCEPT, FALSE);
         gtk_label_set_text(GTK_LABEL(state->editStatus), "Saving…");
         // Writes finish independently of gallery query cancellation or destruction.
@@ -455,6 +486,13 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     atk_object_set_name(gtk_widget_get_accessible(state->tagFilter), "Filter by exact tag name");
     gtk_box_pack_start(GTK_BOX(filterRow), tagLabel, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(filterRow), state->tagFilter, TRUE, TRUE, 0);
+    auto* folderLabel = gtk_label_new("Folder");
+    state->folderFilter = gtk_search_entry_new();
+    gtk_widget_set_name(state->folderFilter, "library-folder-filter");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(state->folderFilter), "Exact top-level folder (empty shows all)");
+    atk_object_set_name(gtk_widget_get_accessible(state->folderFilter), "Filter by exact top-level folder name");
+    gtk_box_pack_start(GTK_BOX(filterRow), folderLabel, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(filterRow), state->folderFilter, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(state->root), filterRow, FALSE, FALSE, 0);
     auto* scroll = gtk_scrolled_window_new(nullptr,nullptr);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);
@@ -518,6 +556,7 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     gtk_box_pack_start(GTK_BOX(state->root),paging,FALSE,FALSE,0);
     g_signal_connect(state->search,"changed",G_CALLBACK(searchChanged),state.get());
     g_signal_connect(state->tagFilter,"changed",G_CALLBACK(searchChanged),state.get());
+    g_signal_connect(state->folderFilter,"changed",G_CALLBACK(searchChanged),state.get());
     g_signal_connect(state->flow,"selected-children-changed",G_CALLBACK(selectionChanged),state.get());
     g_signal_connect(state->sort,"changed",G_CALLBACK(+[](GtkComboBox*, gpointer data) {
         auto* state = static_cast<Gallery*>(data); state->offset = 0; loadPage(shared(state));

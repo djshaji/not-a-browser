@@ -8,8 +8,8 @@ The current build provides:
 
 - Native window, resizable sidebar, Library/Discover/Player/Files navigation, and a session-only light/dark theme switch.
 - SQLite bookmarks, canonical URL deduplication, transactional migrations, and full-text indexing.
-- Grid/list gallery with selection, newest/oldest/title sorting, prefix search, an exact-name tag filter, and 24-item pagination.
-- Bookmark title/description editing and tag assignment, with transactional saves and removal/Undo.
+- Grid/list gallery with selection, newest/oldest/title sorting, prefix search, exact-name tag/folder filters, and 24-item pagination.
+- Bookmark title/description editing and tag/top-level folder assignment, with transactional saves and removal/Undo.
 - Background database queries and thumbnail loading, cancellation of obsolete work, and a bounded thumbnail cache.
 - A command-line bookmark tool, plus database, thumbnail, player, DOM extraction, and UI tests.
 - Native libmpv playback and WebKitGTK webpage loading with DOM-based HLS extraction.
@@ -18,7 +18,7 @@ The current build provides:
 - Listing-card discovery with two sample JSON profiles, per-video Play/Save actions, and bounded next-link/load-more pagination.
 - User-provided listing profiles and a custom HLS discovery profile loaded from `~/.config/notabrowser/`, without rebuilding.
 
-Folder creation and video relationships have repository APIs; folder editing UI is planned. Selected bookmarks support title/description and tag editing, plus removal with Undo. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. CLI bookmarks record the supplied metadata; Discover can save a page's extracted title and poster. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
+Selected bookmarks support title/description, tag, and top-level folder editing, plus removal with Undo. Nested folder management remains planned. The Player page supports local files and direct HTTP/HTTPS media URLs through libmpv. CLI bookmarks record the supplied metadata; Discover can save a page's extracted title and poster. Select a bookmark and choose **Discover & Play selected** to load its page and look for an HLS stream.
 
 ## Requirements
 
@@ -109,12 +109,13 @@ URL normalization handles scheme/host casing, default ports, empty paths, and fr
 
 1. Add bookmarks through the CLI, then open Library and press **Refresh**.
 2. Choose **Grid** or **List**, and sort by newest, oldest, or title.
-3. Enter search terms to match title/description prefixes. Multiple terms must all match; FTS operators and folder filters are not exposed. Enter one exact, case-sensitive tag name in **Tag** to combine it with the text search. Surrounding spaces are trimmed; clear Tag to include every bookmark. Tag changes reset pagination.
+3. Enter search terms to match title/description prefixes. Multiple terms must all match; FTS operators are not exposed. Enter one exact, case-sensitive tag name in **Tag** to combine it with the text search. Surrounding spaces are trimmed; clear Tag to remove the tag restriction. Enter an exact, case-sensitive top-level folder name in **Folder** to intersect it with search and Tag. Empty fields impose no restriction; changing either filter resets pagination. Nested-folder contents are not included by the folder filter.
 4. Use **Previous** and **Next** to browse 24 records per page.
-5. Select a card to display its page URL. Choose **Edit selected** to change its title, description, and tags, then **Save**. Enter tags one per line; saving creates new names and assigns them. Blank lines are ignored and repeated names are deduplicated after trimming surrounding spaces. Spaces and commas inside a name are literal. Remove a line to unassign that tag, or clear the field to remove all assignments. This leaves the tag available for other bookmarks. Metadata and tag changes save together in one database transaction in the background and refresh the gallery and search results. The page URL and thumbnail stay unchanged; Cancel discards unsaved edits. An initiated save continues if you switch pages. Errors stay in the editor so you can retry.
-6. Choose **Remove selected** to remove a bookmark from Library. **Undo removal** restores its title, description, thumbnail, saved timestamp, and folder/tag relationships. One Undo is kept for the current session, until another removal succeeds or the application closes. Switching pages, searching, and Refresh retain it. Removing a bookmark does not delete media files.
-7. If the same URL was saved again, Undo reports a conflict and preserves the existing bookmark and the Undo snapshot. Missing folders/tags also prevent restoration; failures leave the database unchanged and Undo available. The original record ID is reused when free; if another bookmark has reused it, restoration allocates a new ID and its position in newest/oldest sorting may change.
-8. Choose **Discover & Play selected** to load the selected page in WebKit and look for a playable HLS stream.
+5. Select a card to display its page URL. Choose **Edit selected** to change its title, description, and tags, then **Save**. Enter tags one per line; saving creates new names and assigns them. Blank lines are ignored and repeated names are deduplicated after trimming surrounding spaces. Spaces and commas inside a name are literal. Remove a line to unassign that tag, or clear the field to remove all assignments. This leaves the tag available for other bookmarks. Metadata, tag, and top-level folder changes save together in one database transaction in the background and refresh the gallery and search results. The page URL and thumbnail stay unchanged; Cancel discards unsaved edits. An initiated save continues if you switch pages. Errors stay in the editor so you can retry.
+6. In **Edit selected → Folders**, enter top-level folder names one per line. Saving creates missing folders and assigns the bookmark to them. Names are case-sensitive; surrounding spaces and blank lines are ignored, and duplicate names do not create duplicate assignments. Remove a line to unassign a folder, or clear the field to remove all top-level assignments. Nested-folder assignments stay intact. Existing duplicate-named top-level folders match the same filter; retained memberships are preserved, and new assignments use the oldest matching folder. Folders are library collections, separate from directories in Files.
+7. Choose **Remove selected** to remove a bookmark from Library. **Undo removal** restores its title, description, thumbnail, saved timestamp, and folder/tag relationships. One Undo is kept for the current session, until another removal succeeds or the application closes. Switching pages, searching, and Refresh retain it. Removing a bookmark does not delete media files.
+8. If the same URL was saved again, Undo reports a conflict and preserves the existing bookmark and the Undo snapshot. Missing folders/tags also prevent restoration; failures leave the database unchanged and Undo available. The original record ID is reused when free; if another bookmark has reused it, restoration allocates a new ID and its position in newest/oldest sorting may change.
+9. Choose **Discover & Play selected** to load the selected page in WebKit and look for a playable HLS stream.
 
 Thumbnail decoding and database access run outside the GTK main thread. Only the current page's images are requested. Thumbnails are scaled within 192 × 108 pixels, with a disk cache capped at 256 entries. Downloads have a 10-second session timeout and a 5 MiB input limit. Missing or invalid images retain a generic video icon.
 
@@ -182,13 +183,13 @@ With the library, player, and discovery enabled, seven C++ tests are registered:
 
 | Test | Coverage |
 | --- | --- |
-| `database` | Persistence, atomic metadata/tag editing, tag normalization/deduplication, combined search/tag filtering and pagination, FTS updates, transactional removal/restoration, relationship rollback, duplicate and reused-ID conflicts, missing-record errors, migrations, atomic new/duplicate bookmark reporting, metadata preservation, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
+| `database` | Persistence, atomic metadata/tag/folder editing, root-folder reuse and nested-membership preservation, tag normalization/deduplication, combined search/tag/folder filtering and pagination, FTS updates, transactional removal/restoration, relationship rollback, duplicate and reused-ID conflicts, missing-record errors, migrations, atomic new/duplicate bookmark reporting, metadata preservation, relationships, FTS triggers/search, sorting, and pagination across 10,000 records. |
 | `thumbnails` | Image scaling, disk-cache reuse, cancellation, missing images, and unsupported URI handling. |
 | `adapter-profiles` | Config-directory discovery, filename ordering, listing pagination types, HLS override loading, and rejection of invalid, unsupported, and oversized profiles. |
 | `hls-discovery` | Master/media classification, reference resolution, local HTTP redirects, invalid/oversized responses, request headers, and cancellation without a display. |
 | `discovery` | Rendered DOM/title/poster extraction, verified playlists, cancellation, asynchronous saving/duplicates, metadata snapshots during navigation, save failure/retry, automatic gallery refresh, persisted library reopening, and local webpage-to-HLS playback when ffmpeg is installed. |
 | `listings` | Config-loaded profile selection, two local listing fixtures, relative links/posters, missing titles, invalid URLs, per-card Play/Save, deduplication, next-link loops, page limits, dynamic button pagination, delayed DOM insertion, Stop/navigation, and destruction during extraction. |
-| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, metadata/tag editing, cancelled edits, tag persistence across window recreation, filter changes, tag unassignment, and removal/Undo across page navigation, filtered removal, pagination updates, Undo conflicts/retry, destruction during removal, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, transport seeking and reverse/forward speed state, local file playback and folder/selection restoration, and quit cleanup. |
+| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, metadata/tag/folder editing, cancelled edits, assignment persistence across window recreation, combined filters, tag/folder unassignment, and removal/Undo across page navigation, filtered removal, pagination updates, Undo conflicts/retry, destruction during removal, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, transport seeking and reverse/forward speed state, local file playback and folder/selection restoration, and quit cleanup. |
 
 When Python 3 is available, CTest also registers `adapter-runner` for the local
 generic JSON adapter runner. See [the adapter example](examples/adapters/README.md)
@@ -276,8 +277,8 @@ user files requires **Reload profiles** in the relevant tab, but no restart or r
 
 ## Roadmap and contribution
 
-Library supports title/description and tag editing, an exact-name single-tag filter, and removal with a session Undo slot. Global tag renaming/deletion, a tag chooser, multiple-tag filters, and folder organization UI remain future work.
+Library supports title/description, tag, and top-level folder editing, combined exact-name tag/folder filters, and removal with a session Undo slot. Folder trees, folder rename/deletion, global tag renaming/deletion, choosers, and multiple-tag filters remain future work.
 
-Following milestones are a profile for a regularly used website, playback history and Recent, folder organization, richer metadata, discovery expansion, and release hardening. See [Plan.md](Plan.md) for scope, acceptance criteria, and validation expectations.
+Following milestones are a profile for a regularly used website, playback history and Recent, nested folder organization, richer metadata, discovery expansion, and release hardening. See [Plan.md](Plan.md) for scope, acceptance criteria, and validation expectations.
 
 See [Plan.md](Plan.md) for architecture and milestone acceptance criteria, and [AGENTS.md](AGENTS.md) for contributor guidelines. Source modules live in `src/app/`, `src/ui/`, `src/database/`, `src/models/`, and `src/services/`; embedded assets are in `resources/`, and tests are in `tests/`.

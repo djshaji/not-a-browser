@@ -74,10 +74,12 @@ int main(int argc, char** argv) {
         streamgallery::Database db((libraryDirectory / "library.db").string());
         streamgallery::LibraryRepository library(db);
         auto batchTag = library.createTag("Batch");
+        auto collection = library.createFolder("Collection");
         for (int index = 0; index < 30; ++index) {
             auto video = library.bookmark("https://example.com/" + std::to_string(index),
                 index == 0 ? "Unique concert" : "Video " + std::to_string(index));
             library.tagVideo(video.id, batchTag.id);
+            library.addToFolder(video.id, collection.id);
         }
     }
 #endif
@@ -139,6 +141,13 @@ int main(int argc, char** argv) {
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "1–24 of 30 videos") == 0; });
         gtk_button_clicked(GTK_BUTTON(findNamed(window, "library-next")));
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "25–30 of 30 videos") == 0; });
+        auto* folderFilter = GTK_ENTRY(findNamed(window, "library-folder-filter"));
+        gtk_entry_set_text(folderFilter, "Missing folder");
+        waitFor([&] { return g_str_has_prefix(gtk_label_get_text(status), "No videos found."); });
+        gtk_entry_set_text(folderFilter, "Collection");
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "1–24 of 30 videos") == 0; });
+        gtk_button_clicked(GTK_BUTTON(findNamed(window, "library-next")));
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "25–30 of 30 videos") == 0; });
         auto* removeButton = findNamed(window, "library-remove");
         auto* undo = findNamed(window, "library-undo");
         auto* actionStatus = GTK_LABEL(findNamed(window, "library-action-status"));
@@ -182,6 +191,18 @@ int main(int argc, char** argv) {
             std::string result(text); g_free(text);
             return result;
         };
+        auto readFolders = [&] {
+            auto* buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-folders")));
+            GtkTextIter start, end;
+            gtk_text_buffer_get_bounds(buffer, &start, &end);
+            gchar* text = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+            std::string result(text); g_free(text);
+            return result;
+        };
+        const auto originalFolders = readFolders();
+        g_assert_true(originalFolders.find("Collection") != std::string::npos);
+        if (iteration == 1) g_assert_true(originalFolders.find("Watch later") != std::string::npos);
+        gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-folders"))), "Discarded folder", -1);
         const auto originalTags = readTags();
         g_assert_true(originalTags.find("Batch") != std::string::npos);
         if (iteration == 1) g_assert_true(originalTags.find("Music") != std::string::npos);
@@ -195,6 +216,9 @@ int main(int argc, char** argv) {
         g_assert_nonnull(editor);
         g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(findNamed(editor, "library-edit-title"))), ==, originalTitle.c_str());
         g_assert_true(readTags() == originalTags);
+        g_assert_true(readFolders() == originalFolders);
+        gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-folders"))),
+            "Collection\n Watch later \nWatch later\n", -1);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-tags"))),
             iteration == 0 ? "Batch\nMusic\nMusic\n Live, acoustic \n" : "Batch\nMusic", -1);
         const char* editedTitle = iteration == 0 ? "Unique edited concert" : "Renamed concert";
@@ -216,7 +240,7 @@ int main(int argc, char** argv) {
             streamgallery::Database db((libraryDirectory / "library.db").string());
             auto page = streamgallery::LibraryRepository(db).page("Persisted", streamgallery::VideoSort::Newest, 0);
             return page.total == 1 && page.items[0].title == editedTitle &&
-                page.items[0].tags.size() == (iteration == 0 ? 3 : 2);
+                page.items[0].tags.size() == (iteration == 0 ? 3 : 2) && page.items[0].rootFolders.size() == 2;
         });
         waitFor([&] { return !findEditor() && !gtk_widget_get_sensitive(edit) &&
             (iteration == 0 ? g_strcmp0(gtk_label_get_text(status), "1–1 of 1 videos") == 0 :
@@ -225,6 +249,7 @@ int main(int argc, char** argv) {
         gtk_stack_set_visible_child_name(stack, "gallery");
         gtk_entry_set_text(GTK_ENTRY(findNamed(window, "library-search")), "Persisted");
         gtk_entry_set_text(tagFilter, "Music");
+        gtk_entry_set_text(folderFilter, "Watch later");
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "1–1 of 1 videos") == 0; });
         gtk_flow_box_select_child(GTK_FLOW_BOX(flow), gtk_flow_box_get_child_at_index(GTK_FLOW_BOX(flow), 0));
         gtk_button_clicked(GTK_BUTTON(removeButton));
@@ -250,6 +275,7 @@ int main(int argc, char** argv) {
         gtk_stack_set_visible_child_name(stack, "gallery");
         gtk_entry_set_text(tagFilter, "Missing tag");
         gtk_entry_set_text(tagFilter, "Music");
+        gtk_entry_set_text(folderFilter, "Watch later");
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "1–1 of 1 videos") == 0; });
         gtk_combo_box_set_active(GTK_COMBO_BOX(findNamed(window, "library-sort")), 2);
         waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "1–1 of 1 videos") == 0; });
@@ -270,6 +296,21 @@ int main(int argc, char** argv) {
             editor = findEditor();
             g_assert_nonnull(editor);
             g_assert_true(readTags().find("Music") != std::string::npos);
+            gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-folders"))), "", -1);
+            gtk_dialog_response(GTK_DIALOG(editor), GTK_RESPONSE_ACCEPT);
+            waitFor([&] { return !findEditor() && childCount() == 0; });
+            {
+                streamgallery::Database db((libraryDirectory / "library.db").string());
+                auto persisted = streamgallery::LibraryRepository(db).page("Persisted", streamgallery::VideoSort::Newest, 0);
+                g_assert_true(persisted.items[0].rootFolders.empty());
+                g_assert_cmpuint(persisted.items[0].tags.size(), ==, 2);
+            }
+            gtk_entry_set_text(folderFilter, "");
+            waitFor([&] { return g_strcmp0(gtk_label_get_text(status), "1–1 of 1 videos") == 0; });
+            gtk_flow_box_select_child(GTK_FLOW_BOX(flow), gtk_flow_box_get_child_at_index(GTK_FLOW_BOX(flow), 0));
+            gtk_button_clicked(GTK_BUTTON(edit));
+            editor = findEditor();
+            g_assert_nonnull(editor);
             gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(findNamed(editor, "library-edit-tags"))), "", -1);
             gtk_dialog_response(GTK_DIALOG(editor), GTK_RESPONSE_ACCEPT);
             waitFor([&] { return !findEditor() && childCount() == 0; });

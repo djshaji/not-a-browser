@@ -12,8 +12,8 @@ until implemented and validated.
 | Area | Implemented behavior |
 | --- | --- |
 | Application | Native window, resizable sidebar, Library/Discover/Player/Files navigation, session theme switch, and keyboard shortcuts. |
-| Library | SQLite schema version 2, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, asynchronous selected-bookmark metadata/tag editing, and removal with session Undo. |
-| Gallery | Grid/list views, selection, title/description prefix search, an exact-name single-tag filter, sorting, 24-item pagination, asynchronous queries, and bounded thumbnail caching. |
+| Library | SQLite schema version 2, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, asynchronous selected-bookmark metadata/tag/top-level folder editing, and removal with session Undo. |
+| Gallery | Grid/list views, selection, title/description prefix search, exact-name single-tag and top-level folder filters, sorting, 24-item pagination, asynchronous queries, and bounded thumbnail caching. |
 | Playback | GtkGLArea/libmpv rendering, local files and direct media URLs, muted startup, seeking, reverse/forward 2×, speed controls, fullscreen, EOF/replay, and mpv resume files. |
 | Files | Native local file chooser, video/all-file filters, playback activation, and session folder/selection restoration across page switches. Browsing remains available without playback. |
 | Video-page discovery | WebKit DOM extraction, title/poster metadata, bounded native HLS verification, stream selection, automatic playback, cancellation, and asynchronous explicit library saves. |
@@ -21,12 +21,12 @@ until implemented and validated.
 | User profiles | Validated JSON listing profiles and a generic HLS override from the XDG config directory, with Reload profiles and built-in fallback. |
 | Validation | Database, thumbnails, adapter profiles, HLS inspection, rendered discovery, listings, UI smoke, and Python fixture-runner tests. |
 
-Folder creation and video relationship APIs exist, but folder editing UI is not
-implemented. Bookmark metadata/tag editing, tag filtering, and removal with one
-session Undo slot are implemented. The `Video` model and repository queries expose
-descriptions and assigned tags; metadata updates maintain FTS through existing
-triggers. Playback resume currently belongs to libmpv; there is no library-level
-Recent/history workflow.
+Bookmark metadata, tags, top-level folder assignments, combined filters, and
+removal with one session Undo slot are implemented. Nested-folder editing remains
+planned; existing nested assignments are preserved. The `Video` model and
+repository queries expose descriptions, assigned tags, and top-level folder names;
+metadata updates maintain FTS through existing triggers. Playback resume currently
+belongs to libmpv; there is no library-level Recent/history workflow.
 
 ## Architecture and boundaries
 
@@ -78,8 +78,15 @@ The Library management milestone consists of these implemented slices:
    sorting, counts, and pagination. Changing filters resets the page, and a save
    that removes the active tag refreshes the results. Undo restores assignments.
 
+4. **Top-level folders (implemented).** The editor creates and assigns folders
+   from one name per line; deleting a line unassigns that top-level name. Save
+   metadata, tags, and folder assignments together, preserving nested assignments.
+   Reuse existing roots by name; preserve retained duplicate-name memberships.
+   The exact-name Folder filter composes with Tag, text search, sorting, and
+   pagination, and matches roots only. Undo restores all folder relationships.
+
 These slices use schema version 2 without a migration. Global tag renaming/deletion,
-a tag chooser, and multiple-tag filters remain unimplemented. Keep repository
+choosers, folder trees and folder rename/deletion, and multiple-tag filters remain unimplemented. Keep repository
 queries and rendered gallery pages bounded; introduce transactional, versioned
 migrations only when storage changes are required.
 
@@ -92,7 +99,7 @@ Acceptance criteria:
 
 - Edited title/description survive restart and appear correctly in search.
 - Removal updates counts and pagination; Undo restores metadata and relationships.
-- Tag assignment survives restart; tag filters work with search and each sort order.
+- Tag/folder assignments survive restart; combined filters work with search and each sort order, and nested memberships survive top-level edits.
 - Errors are visible and retryable without freezing GTK or corrupting data.
 - Navigation and destruction during pending work cannot apply stale UI updates.
 - Existing discovery, file browsing, playback, and duplicate-save behavior remain intact.
@@ -121,10 +128,11 @@ If adding library-level resume, distinguish it from existing mpv watch-later
 files and account for expiring stream URLs. Add schema migrations and tests only
 once the persistence contract is defined.
 
-### Folder organization and richer metadata
+### Nested folder organization and richer metadata
 
-Expose existing folder relationships through a native UI, then consider nested
-folder management, favorites, saved collections, and export/import. Add duration
+Top-level folder assignment and filtering are implemented. Consider nested
+folder management, a folder tree/chooser, folder rename/deletion, favorites,
+saved collections, and export/import. Add duration
 or other metadata only with a reliable extraction source and clear update rules.
 Preserve user edits when refreshing discovered metadata.
 
