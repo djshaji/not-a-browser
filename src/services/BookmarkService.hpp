@@ -6,6 +6,8 @@ namespace streamgallery {
 void recordPlaybackAsync(const std::string& page, std::function<void()> refresh);
 // Explicit saves finish across navigation. Completion runs on the caller's
 // main context; an empty error indicates success.
+void favoriteLocalFileAsync(const std::string& filename,
+                            std::function<void(bool created, const std::string& error)> complete);
 void saveBookmarkAsync(const std::string& page, const std::string& title, const std::string& poster,
                        std::function<void(bool created, const std::string& error)> complete);
 }

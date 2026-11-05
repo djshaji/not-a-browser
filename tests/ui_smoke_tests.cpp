@@ -1,4 +1,5 @@
 #include "ui/MainWindow.hpp"
+#include "ui/FilesView.hpp"
 #include <initializer_list>
 #include <functional>
 #ifdef HAVE_PLAYER_TESTS
@@ -105,8 +106,8 @@ int main(int argc, char** argv) {
         g_assert_nonnull(stack);
         g_assert_true(gtk_stack_sidebar_get_stack(sidebar) == stack);
         g_assert_cmpstr(gtk_stack_get_visible_child_name(stack), ==, "gallery");
-        const char* shortcutPages[] = {"gallery", "browser", "player", "files"};
-        for (guint index = 0; index < 4; ++index) {
+        const char* shortcutPages[] = {"gallery", "browser", "player", "files", "recent"};
+        for (guint index = 0; index < 5; ++index) {
             GdkEventKey navigationKey{};
             navigationKey.type = GDK_KEY_PRESS;
             navigationKey.keyval = GDK_KEY_1 + index;
@@ -534,6 +535,41 @@ int main(int argc, char** argv) {
             streamgallery::Database db((libraryDirectory / "library.db").string());
             return streamgallery::LibraryRepository(db).page("History playback",streamgallery::VideoSort::Recent,0).total == 1;
         });
+        gtk_stack_set_visible_child_name(stack,"recent");
+        auto* recentRoot = findNamed(window,"recent-videos");
+        g_assert_nonnull(recentRoot);
+        auto* recentStatus = GTK_LABEL(findNamed(recentRoot,"library-status"));
+        auto* recentSearch = GTK_ENTRY(findNamed(recentRoot,"library-search"));
+        g_assert_false(gtk_widget_get_visible(findNamed(recentRoot,"library-sort")));
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(recentStatus),"1–1 of 1 videos") == 0; });
+        gtk_entry_set_text(recentSearch,"No recent match");
+        waitFor([&] { return g_str_has_prefix(gtk_label_get_text(recentStatus),"No videos found."); });
+        gtk_entry_set_text(recentSearch,"History playback");
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(recentStatus),"1–1 of 1 videos") == 0; });
+        auto* recentFlow = GTK_FLOW_BOX(findNamed(recentRoot,"library-videos"));
+        gtk_flow_box_select_child(recentFlow,gtk_flow_box_get_child_at_index(recentFlow,0));
+        gtk_button_clicked(GTK_BUTTON(findNamed(recentRoot,"library-remove")));
+        waitFor([&] { return g_str_has_prefix(gtk_label_get_text(recentStatus),"No videos found."); });
+        // Library and Recent share one Undo slot across page switches.
+        gtk_stack_set_visible_child_name(stack,"gallery");
+        auto* sharedUndo = findNamed(window,"library-undo");
+        waitFor([&] { return gtk_widget_get_sensitive(sharedUndo); });
+        gtk_button_clicked(GTK_BUTTON(sharedUndo));
+        waitFor([&] { return !gtk_widget_get_sensitive(sharedUndo); });
+        gtk_stack_set_visible_child_name(stack,"recent");
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(recentStatus),"1–1 of 1 videos") == 0; });
+        g_assert_cmpstr(gtk_entry_get_text(recentSearch), ==, "History playback");
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(findNamed(recentRoot,"library-action-status"))), ==, "");
+        if (const char* screenshot = g_getenv("STREAM_GALLERY_RECENT_PAGE_SCREENSHOT")) {
+            waitFor([&] { return !gtk_stack_get_transition_running(stack); });
+            gtk_test_widget_wait_for_draw(window);
+            auto* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                gtk_widget_get_allocated_width(window),gtk_widget_get_allocated_height(window));
+            auto* context = cairo_create(surface);
+            gtk_widget_draw(window,context);
+            g_assert_cmpint(cairo_surface_write_to_png(surface,screenshot), ==, CAIRO_STATUS_SUCCESS);
+            cairo_destroy(context); cairo_surface_destroy(surface);
+        }
         gtk_stack_set_visible_child_name(stack, "gallery");
         gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-search")), "History playback");
         gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-tag-filter")), "");
@@ -612,6 +648,36 @@ int main(int argc, char** argv) {
             return matches;
         };
         waitFor(selectedFile);
+#ifdef HAVE_LIBRARY_TESTS
+        auto* favorite = findNamed(window,"files-favorite");
+        g_assert_nonnull(favorite);
+        gtk_button_clicked(GTK_BUTTON(favorite));
+        gtk_stack_set_visible_child_name(stack,"gallery");
+        gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-search")),"transport");
+        gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-tag-filter")),"Favorites");
+        gtk_entry_set_text(GTK_ENTRY(findNamed(window,"library-folder-filter")),"");
+        gtk_combo_box_set_active(GTK_COMBO_BOX(findNamed(window,"library-sort")),0);
+        waitFor([&] { return g_strcmp0(gtk_label_get_text(status),"1–1 of 1 videos") == 0; });
+        auto* localFlow = GTK_FLOW_BOX(findNamed(window,"library-videos"));
+        gtk_flow_box_select_child(localFlow,gtk_flow_box_get_child_at_index(localFlow,0));
+        auto* playLocal = GTK_BUTTON(findNamed(window,"library-discover"));
+        g_assert_cmpstr(gtk_button_get_label(playLocal), ==, "Play selected file");
+        gtk_button_clicked(playLocal);
+        g_assert_cmpstr(gtk_stack_get_visible_child_name(stack), ==, "player");
+        waitFor([&] {
+            streamgallery::Database db((libraryDirectory / "library.db").string());
+            return streamgallery::LibraryRepository(db).page("transport",streamgallery::VideoSort::Recent,0,24,"Favorites").total == 1;
+        });
+        {
+            streamgallery::Database db((libraryDirectory / "library.db").string());
+            streamgallery::LibraryRepository library(db);
+            auto local = library.page("transport",streamgallery::VideoSort::Newest,0,24,"Favorites");
+            library.removeBookmark(local.items[0].id);
+            g_assert_true(g_file_test(longFixture,G_FILE_TEST_IS_REGULAR));
+        }
+        gtk_stack_set_visible_child_name(stack,"files");
+        waitFor(selectedFile);
+#endif
         gtk_button_clicked(GTK_BUTTON(findNamed(window, "files-play")));
         g_assert_cmpstr(gtk_stack_get_visible_child_name(stack), ==, "player");
         gtk_stack_set_visible_child_name(stack, "files");
@@ -695,6 +761,41 @@ int main(int argc, char** argv) {
         streamgallery::Database db((libraryDirectory / "library.db").string());
         return streamgallery::LibraryRepository(db).page("", streamgallery::VideoSort::Newest, 0).total == 29;
     });
+    // Favorites work without a player callback, and writes finish after destruction.
+    const auto favoriteFixture = std::filesystem::path(testDirectory) / "favorite fixture.mp4";
+    g_assert_true(g_file_set_contents(favoriteFixture.c_str(),"fixture",-1,nullptr));
+    bool favoriteRefreshed = false;
+    auto* favoriteWindow = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    auto* favoriteView = streamgallery::createFilesView({},[&] { favoriteRefreshed = true; });
+    gtk_window_set_default_size(GTK_WINDOW(favoriteWindow),900,650);
+    gtk_container_add(GTK_CONTAINER(favoriteWindow),favoriteView);
+    gtk_widget_show_all(favoriteWindow);
+    g_assert_false(gtk_widget_get_sensitive(findNamed(favoriteView,"files-play")));
+    auto* favoriteChooser = GTK_FILE_CHOOSER(findNamed(favoriteView,"files-chooser"));
+    g_assert_true(gtk_file_chooser_set_filename(favoriteChooser,favoriteFixture.c_str()));
+    waitFor([&] {
+        auto* selected = gtk_file_chooser_get_filename(favoriteChooser);
+        const bool matches = selected && favoriteFixture.string() == selected;
+        g_free(selected); return matches;
+    });
+    if (const char* screenshot = g_getenv("STREAM_GALLERY_FILES_SCREENSHOT")) {
+        gtk_test_widget_wait_for_draw(favoriteWindow);
+        auto* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+            gtk_widget_get_allocated_width(favoriteWindow),gtk_widget_get_allocated_height(favoriteWindow));
+        auto* context = cairo_create(surface);
+        gtk_widget_draw(favoriteWindow,context);
+        g_assert_cmpint(cairo_surface_write_to_png(surface,screenshot), ==, CAIRO_STATUS_SUCCESS);
+        cairo_destroy(context); cairo_surface_destroy(surface);
+    }
+    gtk_button_clicked(GTK_BUTTON(findNamed(favoriteView,"files-favorite")));
+    gtk_widget_destroy(favoriteWindow);
+    waitFor([&] { return favoriteRefreshed; });
+    {
+        streamgallery::Database db((libraryDirectory / "library.db").string());
+        auto saved = streamgallery::LibraryRepository(db).page("favorite fixture",streamgallery::VideoSort::Newest,0,24,"Favorites");
+        g_assert_cmpint(saved.total, ==, 1);
+        g_assert_true(g_file_test(favoriteFixture.c_str(),G_FILE_TEST_IS_REGULAR));
+    }
     while (gtk_events_pending()) gtk_main_iteration();
 #endif
     g_object_unref(app);

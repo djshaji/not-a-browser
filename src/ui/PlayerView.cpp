@@ -424,6 +424,12 @@ public:
         poll(); // Deliver completed loads before associating the next request.
         historyPath = path;
         historyPage = referrer;
+        if (historyPage.empty() && g_path_is_absolute(path)) {
+            auto* filename = g_canonicalize_filename(path,nullptr);
+            auto* uri = g_filename_to_uri(filename,nullptr,nullptr);
+            if (uri) historyPage = uri;
+            g_free(uri); g_free(filename);
+        }
         if (loaded) { const char* save[] = {"write-watch-later-config", nullptr}; command(save); }
         loaded = false;
         atEnd = false;

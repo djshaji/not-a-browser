@@ -64,7 +64,7 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     auto* navigationPages = GTK_STACK(gtk_builder_get_object(builder, "pages"));
     auto navigatePage = +[](GtkWidget* widget, GdkEventKey* event, gpointer data) -> gboolean {
         const guint modifiers = event->state & gtk_accelerator_get_default_mod_mask();
-        if (modifiers != GDK_MOD1_MASK || event->keyval < GDK_KEY_1 || event->keyval > GDK_KEY_4)
+        if (modifiers != GDK_MOD1_MASK || event->keyval < GDK_KEY_1 || event->keyval > GDK_KEY_5)
             return FALSE;
 #ifdef HAVE_PLAYER
         auto* view = GTK_WIDGET(g_object_get_data(G_OBJECT(widget), "player-view"));
@@ -72,7 +72,7 @@ GtkWidget* createMainWindow(GtkApplication* application) {
 #else
         (void)widget;
 #endif
-        const char* pages[] = {"gallery", "browser", "player", "files"};
+        const char* pages[] = {"gallery", "browser", "player", "files", "recent"};
         gtk_stack_set_visible_child_name(GTK_STACK(data), pages[event->keyval - GDK_KEY_1]);
         return TRUE;
     };
@@ -106,17 +106,50 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     gtk_widget_set_margin_end(GTK_WIDGET(gallery), 16);
     gtk_widget_set_margin_top(GTK_WIDGET(gallery), 16);
     gtk_widget_set_margin_bottom(GTK_WIDGET(gallery), 16);
+#ifdef HAVE_PLAYER
+    auto openSavedVideo = [window, navigationPages](const std::string& url) {
+        if (g_str_has_prefix(url.c_str(),"file://")) {
+            auto* filename = g_filename_from_uri(url.c_str(),nullptr,nullptr);
+            if (filename) {
+                gtk_stack_set_visible_child_name(navigationPages,"player");
+                openPlayerFile(GTK_WIDGET(g_object_get_data(G_OBJECT(window),"player-view")),filename);
+                g_free(filename);
+            }
+            return;
+        }
 #ifdef HAVE_DISCOVERY
-    auto* galleryView = createGalleryView([window](const std::string& url) {
         auto* browser = GTK_WIDGET(g_object_get_data(G_OBJECT(window), "discovery-view"));
-        auto* stack = GTK_STACK(gtk_widget_get_ancestor(browser, GTK_TYPE_STACK));
-        gtk_stack_set_visible_child_name(stack, "browser");
+        gtk_stack_set_visible_child_name(navigationPages, "browser");
         openBrowserPage(browser, url);
-    });
+#endif
+    };
+#ifdef HAVE_DISCOVERY
+    constexpr bool canDiscover = true;
+#else
+    constexpr bool canDiscover = false;
+#endif
+    auto* galleryView = createGalleryView(openSavedVideo,canDiscover);
+    auto* recentView = createGalleryView(openSavedVideo,canDiscover,true);
 #else
     auto* galleryView = createGalleryView();
+    auto* recentView = createGalleryView({},false,true);
 #endif
+    shareGallerySession(recentView,galleryView);
     gtk_box_pack_start(gallery, galleryView, TRUE, TRUE, 0);
+    auto* recentPage = GTK_BOX(gtk_builder_get_object(builder,"recent_page"));
+    auto* recentChildren = gtk_container_get_children(GTK_CONTAINER(recentPage));
+    for (auto* child = recentChildren; child; child = child->next) gtk_widget_destroy(GTK_WIDGET(child->data));
+    g_list_free(recentChildren);
+    gtk_widget_set_halign(GTK_WIDGET(recentPage),GTK_ALIGN_FILL);
+    gtk_widget_set_valign(GTK_WIDGET(recentPage),GTK_ALIGN_FILL);
+    gtk_widget_set_margin_start(GTK_WIDGET(recentPage),16);
+    gtk_widget_set_margin_end(GTK_WIDGET(recentPage),16);
+    gtk_widget_set_margin_top(GTK_WIDGET(recentPage),16);
+    gtk_widget_set_margin_bottom(GTK_WIDGET(recentPage),16);
+    gtk_box_pack_start(recentPage,recentView,TRUE,TRUE,0);
+    auto refreshLibrary = [library = galleryRefreshCallback(galleryView),recent = galleryRefreshCallback(recentView)] {
+        library(); recent();
+    };
 #endif
 #ifdef HAVE_PLAYER
     auto* player = GTK_BOX(gtk_builder_get_object(builder, "player_page"));
@@ -128,7 +161,7 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     gtk_widget_set_valign(GTK_WIDGET(player), GTK_ALIGN_FILL);
     auto* playerView = createPlayerView();
 #ifdef HAVE_LIBRARY
-    setPlayerPlaybackCallback(playerView, [refresh = galleryRefreshCallback(galleryView)](const std::string& page) {
+    setPlayerPlaybackCallback(playerView, [refresh = refreshLibrary](const std::string& page) {
         recordPlaybackAsync(page, refresh);
     });
 #endif
@@ -164,7 +197,7 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     auto* pages = GTK_STACK(gtk_builder_get_object(builder, "pages"));
     std::function<void()> librarySaved;
 #ifdef HAVE_LIBRARY
-    librarySaved = galleryRefreshCallback(galleryView);
+    librarySaved = refreshLibrary;
 #endif
     auto* browser = createBrowserView([pages, playerView](const std::string& stream, const std::string& page,
                                                         const std::string& agent) {
@@ -183,14 +216,18 @@ GtkWidget* createMainWindow(GtkApplication* application) {
     g_object_set_data(G_OBJECT(window), "discovery-view", browser);
 #endif
     auto* filesPage = GTK_BOX(gtk_builder_get_object(builder, "files_page"));
+    std::function<void(const std::string&)> openLocalFile;
 #ifdef HAVE_PLAYER
-    auto* filesView = createFilesView([navigationPages, playerView](const std::string& filename) {
+    openLocalFile = [navigationPages, playerView](const std::string& filename) {
         gtk_stack_set_visible_child_name(navigationPages, "player");
         openPlayerFile(playerView, filename.c_str());
-    });
-#else
-    auto* filesView = createFilesView();
+    };
 #endif
+    std::function<void()> filesLibraryChanged;
+#ifdef HAVE_LIBRARY
+    filesLibraryChanged = refreshLibrary;
+#endif
+    auto* filesView = createFilesView(std::move(openLocalFile),std::move(filesLibraryChanged));
     gtk_box_pack_start(filesPage, filesView, TRUE, TRUE, 0);
     g_object_unref(builder);
     return window;

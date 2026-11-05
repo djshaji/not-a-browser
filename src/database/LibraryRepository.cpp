@@ -55,6 +55,30 @@ std::string canonicalizeUrl(const std::string& url) {
         path && *path ? path : "/",g_uri_get_query(uri.get()),nullptr);
     std::string result(normalized); g_free(normalized); return result;
 }
+std::string canonicalizeLocalFile(const std::string& filename) {
+    if (filename.find('\0') != std::string::npos || !g_path_is_absolute(filename.c_str()))
+        throw std::invalid_argument("Select an absolute local file path");
+    auto* path = g_canonicalize_filename(filename.c_str(),nullptr);
+    auto* uri = g_filename_to_uri(path,nullptr,nullptr);
+    g_free(path);
+    if (!uri) throw std::invalid_argument("Cannot encode this local file path");
+    std::string result(uri); g_free(uri); return result;
+}
+BookmarkResult LibraryRepository::favoriteLocalFile(const std::string& filename) {
+    const auto canonical = canonicalizeLocalFile(filename);
+    if (!g_file_test(filename.c_str(),G_FILE_TEST_IS_REGULAR))
+        throw std::invalid_argument("Select an existing regular local file");
+    auto* basename = g_filename_display_basename(filename.c_str());
+    const std::string title(basename); g_free(basename);
+    db.execute("BEGIN IMMEDIATE");
+    try {
+        auto result = storeBookmark(canonical,title,"");
+        tagVideo(result.video.id,createTag("Favorites").id);
+        result.video.tags = videoTags(result.video.id);
+        db.execute("COMMIT");
+        return result;
+    } catch (...) { db.execute("ROLLBACK"); throw; }
+}
 Video LibraryRepository::bookmark(const std::string& url, const std::string& title, const std::string& thumbnailUrl) {
     return bookmarkWithStatus(url, title, thumbnailUrl).video;
 }
@@ -62,6 +86,9 @@ BookmarkResult LibraryRepository::bookmarkWithStatus(const std::string& url, con
     const auto canonical=canonicalizeUrl(url);
     if (!thumbnailUrl.empty() && !g_str_has_prefix(thumbnailUrl.c_str(), "file://"))
         (void)canonicalizeUrl(thumbnailUrl);
+    return storeBookmark(canonical,title,thumbnailUrl);
+}
+BookmarkResult LibraryRepository::storeBookmark(const std::string& canonical, const std::string& title, const std::string& thumbnailUrl) {
     Statement insert(db,"INSERT INTO videos(canonical_url,title,thumbnail_url) VALUES(?,?,?) ON CONFLICT(canonical_url) DO NOTHING");
     insert.text(1,canonical); insert.text(2,title); insert.text(3,thumbnailUrl); insert.step();
     const bool created = sqlite3_changes(db.handle()) != 0;
@@ -176,7 +203,16 @@ void LibraryRepository::restoreBookmark(const RemovedBookmark& removed) {
 bool LibraryRepository::recordPlayback(const std::string& pageUrl, std::int64_t playedAt) {
     if (playedAt <= 0) throw std::invalid_argument("Invalid playback timestamp");
     Statement update(db,"UPDATE videos SET last_played_at=max(last_played_at,?) WHERE canonical_url=?");
-    update.integer(1,playedAt); update.text(2,canonicalizeUrl(pageUrl)); update.step();
+    std::string canonical;
+    if (g_str_has_prefix(pageUrl.c_str(),"file://")) {
+        gchar* hostname = nullptr;
+        auto* filename = g_filename_from_uri(pageUrl.c_str(),&hostname,nullptr);
+        const bool local = filename && (!hostname || !*hostname);
+        g_free(hostname);
+        if (!local) { g_free(filename); throw std::invalid_argument("Invalid local file URI"); }
+        canonical = canonicalizeLocalFile(filename); g_free(filename);
+    } else canonical = canonicalizeUrl(pageUrl);
+    update.integer(1,playedAt); update.text(2,canonical); update.step();
     return sqlite3_changes(db.handle()) != 0;
 }
 std::vector<Video> LibraryRepository::videos() {

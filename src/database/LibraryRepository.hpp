@@ -5,6 +5,7 @@
 #include <optional>
 namespace streamgallery {
 std::string canonicalizeUrl(const std::string& url);
+std::string canonicalizeLocalFile(const std::string& filename);
 enum class VideoSort { Newest, Oldest, Title, Recent };
 struct VideoPage {
     std::vector<Video> items;
@@ -24,6 +25,7 @@ public:
     explicit LibraryRepository(Database& database) : db(database) {}
     Video bookmark(const std::string& url, const std::string& title, const std::string& thumbnailUrl = "");
     BookmarkResult bookmarkWithStatus(const std::string& url, const std::string& title, const std::string& thumbnailUrl = "");
+    BookmarkResult favoriteLocalFile(const std::string& filename);
     void updateMetadata(std::int64_t videoId, const std::string& title, const std::string& description);
     void updateBookmark(std::int64_t videoId, const std::string& title, const std::string& description,
                         const std::vector<std::string>& tags,
@@ -44,6 +46,7 @@ public:
     void addToFolder(std::int64_t videoId, std::int64_t folderId);
     void tagVideo(std::int64_t videoId, std::int64_t tagId);
 private:
+    BookmarkResult storeBookmark(const std::string& canonical, const std::string& title, const std::string& thumbnailUrl);
     Database& db;
 };
 }

@@ -11,7 +11,7 @@ until implemented and validated.
 
 | Area | Implemented behavior |
 | --- | --- |
-| Application | Native window, resizable sidebar, Library/Discover/Player/Files navigation, session theme switch, and keyboard shortcuts. |
+| Application | Native window, resizable sidebar, Library/Discover/Player/Files/Recent videos navigation, session theme switch, and keyboard shortcuts. |
 | Library | SQLite schema version 3, transactional migrations, canonical HTTP(S) URL deduplication, metadata preservation on duplicate saves, bookmark CLI, asynchronous selected-bookmark metadata/tag/top-level folder editing, and removal with session Undo. |
 | Gallery | Grid/list views, selection, title/description prefix search, exact-name single-tag and top-level folder filters, sorting, persisted Recent playback history for saved bookmarks, 24-item pagination, asynchronous queries, and bounded thumbnail caching. |
 | Playback | GtkGLArea/libmpv rendering, local files and direct media URLs, muted startup, seeking, reverse/forward 2×, speed controls, fullscreen, EOF/replay, and mpv resume files. |
@@ -25,7 +25,7 @@ Bookmark metadata, tags, top-level folder assignments, combined filters, and
 removal with one session Undo slot are implemented. Nested-folder editing remains
 planned; existing nested assignments are preserved. The `Video` model and
 repository queries expose descriptions, assigned tags, and top-level folder names;
-metadata updates maintain FTS through existing triggers. Playback resume belongs to libmpv. Recent records each saved bookmark’s latest successful video-page playback; local files and unsaved pages are excluded.
+metadata updates maintain FTS through existing triggers. Playback resume belongs to libmpv. Recent records each saved bookmark’s latest successful video-page playback; favorited local files are included, while unsaved files and pages are excluded.
 
 ## Architecture and boundaries
 
@@ -126,6 +126,19 @@ available. Each asynchronous lookup returns at most 50 names, with debouncing,
 cancellation, and generation/lifetime guards. Narrow large lists by typing a
 prefix. Lookups refresh on focus and after Library queries. No migration is needed.
 
+## Local file favorites (implemented)
+
+Files can explicitly save a regular local file to Library under the Favorites tag.
+Saves validate paths and file type in workers, atomically add the bookmark and tag,
+and preserve metadata/other assignments on duplicates. A normalized, encoded
+absolute file URI supplies identity; no schema change is needed. Gallery selection
+routes local entries directly to libmpv, including builds without discovery.
+Successful playback of saved files updates Recent. Editing, filters, and removal/
+Undo apply normally without deleting media. Files retains folder and selection.
+Writes finish across navigation/destruction with guarded status callbacks.
+Favoriting remains available without the player; builds without Library omit it.
+Moved/missing paths require re-adding; symlink paths remain distinct.
+
 ## Following milestones
 
 ### A real website profile
@@ -140,17 +153,20 @@ and expected behavior must be established before implementation.
 ### Playback history and Recent (implemented)
 
 Schema version 3 adds a UTC microsecond last-played timestamp and index. Library's
-Recent dropdown entry shows played bookmarks ordered by timestamp, then descending
+dedicated Recent videos page (Alt+5) and Recent dropdown entry show played bookmarks ordered by timestamp, then descending
 ID for ties; existing search/tag/folder predicates and bounded pagination apply.
+Recent videos keeps its own filters and view mode, fixes ordering to last played,
+and refreshes on navigation and successful playback/saves. The page retains the
+existing editor/removal behavior and shares the Library Undo slot and mutation guards.
 Successful libmpv file loading from video-page discovery records the durable page
 URL in a database worker and refreshes the gallery through its lifetime guard.
-Unsuccessful loads, direct media playback, local files, and unsaved pages do not
+Unsuccessful loads, direct media playback, unsaved local files, and unsaved pages do not
 create entries. Late writes cannot replace newer timestamps. Removal and Undo
 preserve the timestamp in the transactional snapshot. History survives restart;
 existing libraries migrate with no invented playback history. Pausing and replay
 within the loaded file do not update the timestamp. Resume remains owned by mpv.
 
-Future slices may define history for local files or unsaved discoveries, expose
+Future slices may define history for unsaved discoveries, expose
 playback times in cards, or add library-level resume with expiring-stream handling.
 
 ### Nested folder organization and richer metadata

@@ -97,6 +97,47 @@ int main() {
             try { library.assignmentNames(false,"",101); } catch (const std::invalid_argument&) { invalid = true; }
             check(invalid);
         }
+        const auto localPath = path.parent_path() / "local favorites.db";
+        const auto mediaPath = path.parent_path() / "local # 100% संगीत.mp4";
+        check(g_file_set_contents(mediaPath.c_str(),"fixture",-1,nullptr));
+        {
+            streamgallery::Database db(localPath.string());
+            streamgallery::LibraryRepository library(db);
+            auto saved = library.favoriteLocalFile(mediaPath.string());
+            check(saved.created && saved.video.tags == std::vector<std::string>{"Favorites"});
+            check(saved.video.canonicalUrl.find("%23") != std::string::npos);
+            check(saved.video.canonicalUrl.find("%25") != std::string::npos);
+            gchar* decoded = g_filename_from_uri(saved.video.canonicalUrl.c_str(),nullptr,nullptr);
+            check(decoded && mediaPath.string() == decoded); g_free(decoded);
+            library.updateBookmark(saved.video.id,"Edited local","Description",{"Favorites","Music"},std::vector<std::string>{"Local"});
+            auto duplicate = library.favoriteLocalFile((path.parent_path() / "." / mediaPath.filename()).string());
+            check(!duplicate.created && duplicate.video.id == saved.video.id);
+            check(duplicate.video.title == "Edited local" && duplicate.video.tags.size() == 2);
+            check(library.page("Edited",streamgallery::VideoSort::Title,0,24,"Favorites","Local").total == 1);
+            check(library.recordPlayback(saved.video.canonicalUrl,123));
+            auto removed = library.removeBookmark(saved.video.id);
+            check(g_file_test(mediaPath.c_str(),G_FILE_TEST_IS_REGULAR));
+            check(library.videos().empty());
+            library.restoreBookmark(removed);
+            check(library.page("",streamgallery::VideoSort::Recent,0).items[0].lastPlayedAt == 123);
+            // A failed tag assignment rolls back the new bookmark as well.
+            db.execute("CREATE TRIGGER reject_favorite BEFORE INSERT ON video_tags BEGIN SELECT RAISE(ABORT,'test'); END");
+            const auto another = path.parent_path() / "another.mp4";
+            check(g_file_set_contents(another.c_str(),"fixture",-1,nullptr));
+            bool rejected = false;
+            try { library.favoriteLocalFile(another.string()); } catch (const std::exception&) { rejected = true; }
+            check(rejected && library.videos().size() == 1);
+            for (const auto& invalid : {std::string("relative.mp4"),path.parent_path().string(),(path.parent_path()/"missing.mp4").string(),std::string("https://example.com/media.mp4")}) {
+                rejected = false;
+                try { library.favoriteLocalFile(invalid); } catch (const std::exception&) { rejected = true; }
+                check(rejected);
+            }
+        }
+        {
+            streamgallery::Database db(localPath.string());
+            auto result = streamgallery::LibraryRepository(db).page("",streamgallery::VideoSort::Recent,0,24,"Favorites");
+            check(result.total == 1 && result.items[0].title == "Edited local");
+        }
         const auto historyPath = path.parent_path() / "history.db";
         {
             streamgallery::Database db(historyPath.string());

@@ -6,7 +6,7 @@ A native Linux video browser, bookmark library, and media player built with C++1
 
 The current build provides:
 
-- Native window, resizable sidebar, Library/Discover/Player/Files navigation, and a session-only light/dark theme switch.
+- Native window, resizable sidebar, Library/Discover/Player/Files/Recent videos navigation, and a session-only light/dark theme switch.
 - SQLite bookmarks, canonical URL deduplication, transactional migrations, and full-text indexing.
 - Grid/list gallery with selection, newest/oldest/title sorting and Recent playback history, prefix search, exact-name tag/folder filters, and 24-item pagination.
 - Bookmark title/description editing and tag/top-level folder assignment, with transactional saves and removal/Undo.
@@ -111,7 +111,7 @@ Open **Library** to browse saved bookmarks. Press **Refresh** after adding recor
 through the CLI or another application; saves made in Discover refresh it automatically.
 
 - Choose **Grid** or **List**, then sort by newest, oldest, or title.
-- Choose **Recent** in the same dropdown to show only played bookmarks, most recently played first. Search, Tag, Folder, pagination, editing, and Undo work in Recent too.
+- Open **Recent videos** in the sidebar (or press **Alt+5**) for saved videos ordered by latest successful playback, including local favorites. It has independent search, Tag/Folder filters, Grid/List mode, and pagination, plus the same editor and removal controls. Library and Recent share one Undo slot. Returning to the page refreshes it; saves and playback refresh it automatically. The existing Library **Recent** sort remains available.
 - Search matches title/description prefixes. Multiple terms must all match; FTS operators are not exposed.
 - **Tag** and **Folder** suggest existing names as you type. Choose a suggestion to fill the complete name; each filter accepts one exact, case-sensitive name. They intersect with text search and each other. Surrounding spaces are trimmed; an empty field adds no restriction. Folder matches top-level memberships only, without including nested-folder contents.
 - Changing search or either filter resets pagination. **Previous** and **Next** browse 24 records per page.
@@ -174,7 +174,18 @@ folder navigates into it. The current folder and selected file are retained when
 switching pages, including when returning from playback, for the current session.
 
 Files remains available in builds without the player, with playback disabled.
-Browsing local files does not add them to the bookmark library.
+Choose **Add to favorites** to save the selected regular file to Library with the
+**Favorites** tag. In Library, enter or select **Favorites** in Tag, select a file,
+and choose **Play selected file**. Local playback uses the native player directly.
+Favorites support the existing editor, folders, removal/Undo, and Recent history;
+removal never deletes the file. Saves run in the background and finish after
+navigation. Re-adding a file preserves edited metadata and other assignments.
+
+Favorites use an absolute, normalized `file://` path and the filename as the initial
+title. Spaces and special characters are encoded. Renaming or moving a file does
+not update its saved path; a missing file reports a playback error. Symlink paths
+remain distinct. Browsing and playing files alone does not save them. Favoriting
+requires the library build option and remains available without playback.
 
 ## Playback
 
@@ -188,8 +199,9 @@ A working OpenGL desktop session is required. Errors appear below the playback c
 
 Successful video-page playback updates the saved page's last-played time in a
 background worker and refreshes Library automatically. Recent stores one latest
-playback time per bookmark and survives restart. Loading failures, local files,
-direct media URLs, and pages absent from Library when history is written do not
+playback time per bookmark and survives restart. Favorited local files also enter
+Recent after successful playback, including playback from Files or Open file.
+Loading failures, unsaved local files, direct media URLs, and pages absent from Library when history is written do not
 create history entries or bookmarks. Saving a page after playback does not
 retroactively record it; play it again to include it in Recent. Removing a
 bookmark removes its history; Undo restores that time along with its metadata.
@@ -201,11 +213,11 @@ libmpv saves resume state when replacing a playing file or closing the applicati
 
 ## Keyboard shortcuts
 
-Single-key shortcuts work throughout the main window and in fullscreen when focus is outside text fields and embedded web pages. Text fields and web pages receive their normal typing and navigation keys, including Q. On Files, playback shortcuts are disabled so the file chooser keeps its normal navigation keys; Escape and page shortcuts remain available, and Q still quits when focus is outside a text field. Alt+1–4 page shortcuts remain available while typing. Shift variants are accepted; other Ctrl/Alt/Super combinations retain their normal behavior.
+Single-key shortcuts work throughout the main window and in fullscreen when focus is outside text fields and embedded web pages. Text fields and web pages receive their normal typing and navigation keys, including Q. On Files, playback shortcuts are disabled so the file chooser keeps its normal navigation keys; Escape and page shortcuts remain available, and Q still quits when focus is outside a text field. Alt+1–5 page shortcuts remain available while typing. Shift variants are accepted; other Ctrl/Alt/Super combinations retain their normal behavior.
 
 | Key | Action |
 | --- | --- |
-| **Alt+1** / **Alt+2** / **Alt+3** / **Alt+4** | Switch to Library / Discover / Player / Files, leaving fullscreen if needed. |
+| **Alt+1** / **Alt+2** / **Alt+3** / **Alt+4** / **Alt+5** | Switch to Library / Discover / Player / Files / Recent videos, leaving fullscreen if needed. |
 | **F** | Toggle video-only fullscreen. |
 | **Escape** | Leave fullscreen and restore the previous page. |
 | **P** | Toggle play/pause, or replay an ended video. |
@@ -245,7 +257,7 @@ With the library, player, and discovery enabled, seven C++ tests are registered:
 | `hls-discovery` | Master/media classification, reference resolution, local HTTP redirects, invalid/oversized responses, request headers, and cancellation without a display. |
 | `discovery` | Rendered DOM/title/poster extraction, verified playlists, cancellation, asynchronous saving/duplicates, metadata snapshots during navigation, save failure/retry, automatic gallery refresh, persisted library reopening, and local webpage-to-HLS playback when ffmpeg is installed. |
 | `listings` | Config-loaded profile selection, two local listing fixtures, relative links/posters, missing titles, invalid URLs, per-card Play/Save, deduplication, next-link loops, page limits, dynamic button pagination, delayed DOM insertion, Stop/navigation, and destruction during extraction. |
-| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, metadata/tag/folder editing, cancelled edits, assignment persistence across window recreation, combined filters, tag/folder unassignment, and removal/Undo across page navigation, filtered removal, pagination updates, Undo conflicts/retry, destruction during removal, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, transport seeking and reverse/forward speed state, local file playback and folder/selection restoration, successful playback appearing in Recent, failed loads excluded from history, and quit cleanup. |
+| `ui-smoke` | Window lifecycle, numeric locale initialization, navigation, gallery paging/search, metadata/tag/folder editing, cancelled edits, assignment persistence across window recreation, combined filters, tag/folder unassignment, and removal/Undo across page navigation, filtered removal, pagination updates, Undo conflicts/retry, destruction during removal, theme switching, window shortcuts, mute/volume synchronization, fullscreen restoration, video EOF retention/replay, transport seeking and reverse/forward speed state, local file playback and folder/selection restoration, successful playback appearing in Recent videos, Alt+5 navigation, independent Recent search, Undo across Library/Recent, failed loads excluded from history, and quit cleanup. |
 
 When Python 3 is available, CTest also registers `adapter-runner` for the local
 generic JSON adapter runner. See [the adapter example](examples/adapters/README.md)
@@ -261,7 +273,7 @@ For manual validation:
 4. Use **Discover → Load & Play** with a page exposing an `.m3u8` URL in its DOM. Check automatic native playback and **Stop loading**.
 5. Return to Discover and choose **Save to Library**. Confirm the page appears in Library without Refresh, save again to check duplicate feedback, then restart to check persistence.
 6. Browse Files, play a selected file, and return to confirm its folder and selection are retained. Switch to another page and back to check the same behavior.
-7. Test shortcuts with a control focused and in fullscreen, plus Alt+1–4 while typing. Confirm Files retains normal chooser navigation; use **Q** last because it quits immediately.
+7. Test shortcuts with a control focused and in fullscreen, plus Alt+1–5 while typing. Confirm Files retains normal chooser navigation; use **Q** last because it quits immediately.
 
 ## Webpage HLS discovery
 

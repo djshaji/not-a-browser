@@ -14,6 +14,12 @@
 namespace streamgallery {
 namespace {
 constexpr int pageSize = 24;
+struct Gallery;
+struct GallerySession {
+    std::optional<RemovedBookmark> removed;
+    bool changing = false, editing = false;
+    std::vector<std::weak_ptr<Gallery>> views;
+};
 struct Gallery {
     GtkWidget *root, *search, *sort, *mode, *flow, *status, *selection, *previous, *next, *refresh;
     GtkWidget* discover = nullptr;
@@ -27,11 +33,12 @@ struct Gallery {
     GtkWidget* folderFilter = nullptr;
     GtkWidget* editStatus = nullptr;
     GtkWidget *tagChooser = nullptr, *folderChooser = nullptr;
+    bool canDiscover = true;
+    bool recentOnly = false;
     bool saving = false;
-    bool changing = false;
     bool loading = true;
     GtkWidget *remove = nullptr, *undo = nullptr, *actionStatus = nullptr;
-    std::optional<RemovedBookmark> removed;
+    std::shared_ptr<GallerySession> session = std::make_shared<GallerySession>();
     std::function<void(const std::string&)> openPage;
     GCancellable* cancellable = nullptr;
     guint debounce = 0;
@@ -62,11 +69,22 @@ void loadPage(const GalleryPtr& state);
 void updateActions(Gallery* state) {
     if (state->closed) return;
     GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(state->flow));
-    const bool available = selected && !state->loading && !state->changing && !state->editor;
+    const bool available = selected && !state->loading && !state->session->changing && !state->session->editing;
     gtk_widget_set_sensitive(state->edit, available);
     gtk_widget_set_sensitive(state->remove, available);
-    gtk_widget_set_sensitive(state->undo, state->removed.has_value() && !state->changing && !state->editor);
+    gtk_widget_set_sensitive(state->undo, state->session->removed.has_value() && !state->session->changing && !state->session->editing);
     g_list_free(selected);
+}
+void updateSessionActions(Gallery* state) {
+    for (const auto& view : state->session->views)
+        if (auto other = view.lock()) updateActions(other.get());
+}
+void refreshOtherViews(Gallery* state) {
+    for (const auto& view : state->session->views)
+        if (auto other = view.lock(); other && other.get() != state && !other->closed) {
+            gtk_label_set_text(GTK_LABEL(other->actionStatus),"");
+            loadPage(other);
+        }
 }
 void thumbnailWorker(GTask* task, gpointer, gpointer data, GCancellable* cancellable) {
     auto* request = static_cast<Thumbnail*>(data);
@@ -123,6 +141,7 @@ void render(const GalleryPtr& state) {
         if (*gtk_entry_get_text(GTK_ENTRY(state->search)) || *gtk_entry_get_text(GTK_ENTRY(state->tagFilter)) ||
             *gtk_entry_get_text(GTK_ENTRY(state->folderFilter)))
             message = "No videos found. Clear the search, tag, or folder filter, or add bookmarks.";
+        else if (state->recentOnly) message = "No recent videos. Play a saved video or a local favorite to see it here.";
         else {
 #ifdef HAVE_DISCOVERY
             message = "No videos found. Save a page from Discover, or add CLI bookmarks and press Refresh.";
@@ -185,7 +204,7 @@ void loadPage(const GalleryPtr& state) {
         gtk_entry_get_text(GTK_ENTRY(state->search)),
         gtk_entry_get_text(GTK_ENTRY(state->tagFilter)),
         gtk_entry_get_text(GTK_ENTRY(state->folderFilter)),
-        static_cast<VideoSort>(gtk_combo_box_get_active(GTK_COMBO_BOX(state->sort))),state->offset};
+        state->recentOnly ? VideoSort::Recent : static_cast<VideoSort>(gtk_combo_box_get_active(GTK_COMBO_BOX(state->sort))),state->offset};
     auto* task = g_task_new(nullptr,state->cancellable,queryReady,nullptr);
     g_task_set_task_data(task,query,[](gpointer data) { delete static_cast<Query*>(data); });
     g_task_run_in_thread(task,queryWorker);
@@ -246,6 +265,7 @@ void editReady(GObject*, GAsyncResult* result, gpointer) {
             // A pending search must not supersede the post-save refresh.
             if (state->debounce) { g_source_remove(state->debounce); state->debounce = 0; }
             loadPage(state);
+            refreshOtherViews(state.get());
         }
     }
     g_clear_error(&error);
@@ -288,13 +308,14 @@ GtkWidget* assignmentChooser(GtkWidget* view, bool folders) {
 }
 void editSelected(GtkButton*, gpointer data) {
     auto state = shared(static_cast<Gallery*>(data));
-    if (state->editor || state->saving || state->changing || state->loading) return;
+    if (state->session->editing || state->saving || state->session->changing || state->loading) return;
     GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(state->flow));
     if (!selected) return;
     const int index = gtk_flow_box_child_get_index(GTK_FLOW_BOX_CHILD(selected->data));
     g_list_free(selected);
     if (index < 0 || static_cast<std::size_t>(index) >= state->page.items.size()) return;
     const auto video = state->page.items[index];
+    state->session->editing = true;
     state->editor = gtk_dialog_new_with_buttons("Edit bookmark",
         GTK_WINDOW(gtk_widget_get_toplevel(state->root)),
         static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
@@ -366,7 +387,8 @@ void editSelected(GtkButton*, gpointer data) {
     g_signal_connect(state->editor, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer data) {
         auto* state = static_cast<Gallery*>(data);
         state->editor = nullptr;
-        if (!state->closed) updateActions(state);
+        state->session->editing = false;
+        if (!state->closed) updateSessionActions(state);
     }), state.get());
     g_signal_connect(state->editor, "response", G_CALLBACK(+[](GtkDialog* dialog, gint response, gpointer) {
         auto* captured = static_cast<EditRequest*>(g_object_get_data(G_OBJECT(dialog), "edit-request"));
@@ -442,33 +464,34 @@ void removeReady(GObject*, GAsyncResult* result, gpointer) {
     auto state = request->gallery;
     GError* error = nullptr;
     std::unique_ptr<RemovedBookmark> removed(static_cast<RemovedBookmark*>(g_task_propagate_pointer(task, &error)));
-    state->changing = false;
+    state->session->changing = false;
     if (!state->closed) {
         if (error) gtk_label_set_text(GTK_LABEL(state->actionStatus), error->message);
         else {
             if (request->restore) {
-                state->removed.reset();
+                state->session->removed.reset();
                 gtk_label_set_text(GTK_LABEL(state->actionStatus), "Bookmark restored.");
             } else {
-                state->removed = std::move(*removed);
-                const auto& video = state->removed->video;
+                state->session->removed = std::move(*removed);
+                const auto& video = state->session->removed->video;
                 const auto message = "Removed: " + (video.title.empty() ? video.canonicalUrl : video.title) +
                     ". Undo is available until the next removal or application close.";
                 gtk_label_set_text(GTK_LABEL(state->actionStatus), message.c_str());
             }
             if (state->debounce) { g_source_remove(state->debounce); state->debounce = 0; }
             loadPage(state);
+            refreshOtherViews(state.get());
         }
-        updateActions(state.get());
+        updateSessionActions(state.get());
     }
     g_clear_error(&error);
 }
 void changeBookmark(GtkButton* button, gpointer data) {
     auto state = shared(static_cast<Gallery*>(data));
-    if (state->changing || state->editor) return;
+    if (state->session->changing || state->session->editing) return;
     const bool undo = GTK_WIDGET(button) == state->undo;
     std::int64_t id = 0;
-    if (undo) { if (!state->removed) return; }
+    if (undo) { if (!state->session->removed) return; }
     else {
         if (state->loading) return;
         GList* selected = gtk_flow_box_get_selected_children(GTK_FLOW_BOX(state->flow));
@@ -478,12 +501,12 @@ void changeBookmark(GtkButton* button, gpointer data) {
         if (index < 0 || static_cast<std::size_t>(index) >= state->page.items.size()) return;
         id = state->page.items[index].id;
     }
-    state->changing = true;
+    state->session->changing = true;
     updateActions(state.get());
     gtk_label_set_text(GTK_LABEL(state->actionStatus), undo ? "Restoring bookmark…" : "Removing bookmark…");
     auto* request = new RemoveRequest{state,
         (std::filesystem::path(g_get_user_data_dir()) / "stream-gallery" / "library.db").string(),
-        id, undo ? state->removed : std::nullopt};
+        id, undo ? state->session->removed : std::nullopt};
     // Initiated mutations finish independently of navigation/query cancellation.
     auto* task = g_task_new(nullptr, nullptr, removeReady, nullptr);
     g_task_set_task_data(task, request, [](gpointer data) { delete static_cast<RemoveRequest*>(data); });
@@ -500,25 +523,42 @@ void selectionChanged(GtkFlowBox* flow, gpointer data) {
         if (index >= 0 && static_cast<std::size_t>(index) < state->page.items.size()) {
             const auto& video = state->page.items[index];
             gtk_label_set_text(GTK_LABEL(state->selection),video.canonicalUrl.c_str());
-            if (state->discover) gtk_widget_set_sensitive(state->discover, TRUE);
+            if (state->discover) {
+                const bool local = g_str_has_prefix(video.canonicalUrl.c_str(),"file://");
+                gtk_button_set_label(GTK_BUTTON(state->discover),local ? "Play selected file" : "Discover & Play selected");
+                gtk_widget_set_sensitive(state->discover,local || state->canDiscover);
+            }
         }
     }
     g_list_free(selected);
 }
 }
-GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
+GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage, bool canDiscover, bool recentOnly) {
     auto state = std::make_shared<Gallery>();
+    state->session->views.push_back(state);
     state->openPage = std::move(openPage);
+    state->canDiscover = canDiscover;
+    state->recentOnly = recentOnly;
     state->root = gtk_box_new(GTK_ORIENTATION_VERTICAL,12);
     g_object_set_data_full(G_OBJECT(state->root),"gallery-state",new GalleryPtr(state),
         [](gpointer data) { delete static_cast<GalleryPtr*>(data); });
+    if (recentOnly) {
+        auto* title = gtk_label_new("Recent videos");
+        gtk_label_set_xalign(GTK_LABEL(title),0);
+        gtk_style_context_add_class(gtk_widget_get_style_context(title),"empty-title");
+        gtk_box_pack_start(GTK_BOX(state->root),title,FALSE,FALSE,0);
+    }
     auto* controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
     state->search = gtk_search_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(state->search),"Search titles and descriptions");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(state->search),recentOnly ? "Search recent videos" : "Search titles and descriptions");
     state->sort = gtk_combo_box_text_new();
     for (const char* label : {"Newest first", "Oldest first", "Title A–Z", "Recent"})
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state->sort),label);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(state->sort),0);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state->sort),recentOnly ? 3 : 0);
+    if (recentOnly) {
+        gtk_widget_set_no_show_all(state->sort,TRUE);
+        gtk_widget_hide(state->sort);
+    }
     state->mode = gtk_combo_box_text_new();
     for (const char* label : {"Grid", "List"}) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state->mode),label);
     gtk_combo_box_set_active(GTK_COMBO_BOX(state->mode),0);
@@ -630,7 +670,10 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
         if (state->debounce) { g_source_remove(state->debounce); state->debounce = 0; }
         if (state->cancellable) g_cancellable_cancel(state->cancellable);
     }),state.get());
-    gtk_widget_set_name(state->root,"library-gallery");
+    g_signal_connect(state->root,"map",G_CALLBACK(+[](GtkWidget*, gpointer data) {
+        loadPage(shared(static_cast<Gallery*>(data)));
+    }),state.get());
+    gtk_widget_set_name(state->root,recentOnly ? "recent-videos" : "library-gallery");
     gtk_widget_set_name(state->search,"library-search");
     gtk_widget_set_name(state->sort,"library-sort");
     gtk_widget_set_name(state->mode,"library-mode");
@@ -644,6 +687,14 @@ GtkWidget* createGalleryView(std::function<void(const std::string&)> openPage) {
     }
     loadPage(state);
     return state->root;
+}
+void shareGallerySession(GtkWidget* gallery, GtkWidget* other) {
+    auto* state = static_cast<GalleryPtr*>(g_object_get_data(G_OBJECT(gallery),"gallery-state"));
+    auto* source = static_cast<GalleryPtr*>(g_object_get_data(G_OBJECT(other),"gallery-state"));
+    if (state && source) {
+        (*state)->session = (*source)->session;
+        (*state)->session->views.push_back(*state);
+    }
 }
 std::function<void()> galleryRefreshCallback(GtkWidget* gallery) {
     auto* stored = static_cast<GalleryPtr*>(g_object_get_data(G_OBJECT(gallery), "gallery-state"));
